@@ -1,4 +1,4 @@
-﻿//
+//
 //  Copyright (c) Microsoft Corporation. All rights reserved.
 //  Licensed under the MIT License. See License.txt in the project root for license information.
 //
@@ -7,224 +7,216 @@
 //
 namespace Microsoft.VisualStudio.Text.Editor.Implementation
 {
-    using System;
-    using System.Collections.Generic;
-    using System.Collections.ObjectModel;
-    using System.ComponentModel.Composition;
+	using System;
+	using System.Collections.Generic;
+	using System.Collections.ObjectModel;
 
-    using Microsoft.VisualStudio.Utilities;
-    using Microsoft.VisualStudio.Text.Projection;
-    using Microsoft.VisualStudio.Text.Utilities;
+	using Microsoft.VisualStudio.Utilities;
+	using Microsoft.VisualStudio.Text.Projection;
+	using Microsoft.VisualStudio.Text.Utilities;
 
-    internal class ConnectionManager
-    {
-        private class Listener
-        {
-            private readonly Lazy<IWpfTextViewConnectionListener, IContentTypeAndTextViewRoleMetadata> importInfo;
-            private IWpfTextViewConnectionListener listener;
-            private readonly GuardedOperations guardedOperations;
+	internal class ConnectionManager
+	{
+		private abstract class BaseListener
+		{
+			public abstract object ErrorSource { get; }
+			public abstract IContentTypeAndTextViewRoleMetadata Metadata { get; }
+			public abstract void SubjectBuffersConnected (ITextView textView, ConnectionReason reason, Collection<ITextBuffer> subjectBuffers);
+			public abstract void SubjectBuffersDisconnected (ITextView textView, ConnectionReason reason, Collection<ITextBuffer> subjectBuffers);
+		}
 
-            public Listener(Lazy<IWpfTextViewConnectionListener, IContentTypeAndTextViewRoleMetadata> importInfo, GuardedOperations guardedOperations)
-            {
-                this.importInfo = importInfo;
-                this.guardedOperations = guardedOperations;
-            }
+		private abstract class ListenerCommon<T> : BaseListener
+		{
+			private readonly Lazy<T, IContentTypeAndTextViewRoleMetadata> importInfo;
+			private T listener;
+			private readonly GuardedOperations guardedOperations;
 
-            public IContentTypeAndTextViewRoleMetadata Metadata
-            {
-                get { return importInfo.Metadata; }
-            }
+			public ListenerCommon (Lazy<T, IContentTypeAndTextViewRoleMetadata> importInfo, GuardedOperations guardedOperations)
+			{
+				this.importInfo = importInfo;
+				this.guardedOperations = guardedOperations;
+			}
 
-            public IWpfTextViewConnectionListener Instance
-            {
-                get
-                {
-                    if (this.listener == null)
-                    {
-                        this.listener = this.guardedOperations.InstantiateExtension(this.importInfo, this.importInfo);
-                    }
-                    return this.listener;
-                }
-            }
-        }
+			public override IContentTypeAndTextViewRoleMetadata Metadata {
+				get { return importInfo.Metadata; }
+			}
 
-        IWpfTextView _textView;
-        List<Listener> listeners = new List<Listener>();
-        GuardedOperations _guardedOperations;
+			public T Instance {
+				get {
+					if (this.listener == null) {
+						this.listener = this.guardedOperations.InstantiateExtension (this.importInfo, this.importInfo);
+					}
+					return this.listener;
+				}
+			}
 
-        public ConnectionManager(IWpfTextView textView, 
-                                 ICollection<Lazy<IWpfTextViewConnectionListener, IContentTypeAndTextViewRoleMetadata>> textViewConnectionListeners,
-                                 GuardedOperations guardedOperations)
-        {
-            if (textView == null)
-            {
-                throw new ArgumentNullException("textView");
-            }
-            if (textViewConnectionListeners == null)
-            {
-                throw new ArgumentNullException("textViewConnectionListeners");
-            }
-            if (guardedOperations == null)
-            {
-                throw new ArgumentNullException("guardedOperations");
-            }
+			public override object ErrorSource { get { return this.Instance; } }
+		}
 
-            _textView = textView;
-            _guardedOperations = guardedOperations;
+		private class NonWpfListener : ListenerCommon<ITextViewConnectionListener>
+		{
+			public NonWpfListener (Lazy<ITextViewConnectionListener, IContentTypeAndTextViewRoleMetadata> importInfo, GuardedOperations guardedOperations)
+				: base (importInfo, guardedOperations)
+			{
+			}
 
-            List<Lazy<IWpfTextViewConnectionListener, IContentTypeAndTextViewRoleMetadata>> filteredListeners =
-                UIExtensionSelector.SelectMatchingExtensions(textViewConnectionListeners, _textView.Roles);
+			public override void SubjectBuffersConnected (ITextView textView, ConnectionReason reason, Collection<ITextBuffer> subjectBuffers)
+			{
+				this.Instance?.SubjectBuffersConnected (textView, reason, subjectBuffers);
+			}
 
-            if (filteredListeners.Count > 0)
-            {
-                foreach (var listenerExport in filteredListeners)
-                {
-                    Listener listener = new Listener(listenerExport, guardedOperations);
-                    this.listeners.Add(listener);
+			public override void SubjectBuffersDisconnected (ITextView textView, ConnectionReason reason, Collection<ITextBuffer> subjectBuffers)
+			{
+				this.Instance?.SubjectBuffersDisconnected (textView, reason, subjectBuffers);
+			}
+		}
 
-                    Collection<ITextBuffer> subjectBuffers =
-                        textView.BufferGraph.GetTextBuffers(buffer => (Match(listenerExport.Metadata, buffer.ContentType)));
+		ITextView _textView;
+		List<BaseListener> listeners = new List<BaseListener> ();
+		GuardedOperations _guardedOperations;
 
-                    if (subjectBuffers.Count > 0)
-                    {
-                        var instance = listener.Instance;
-                        if (instance != null)
-                        {
-                            _guardedOperations.CallExtensionPoint(instance,
-                                                                  () => instance.SubjectBuffersConnected(_textView, ConnectionReason.TextViewLifetime, subjectBuffers));
-                        }
-                    }
-                }
-                textView.BufferGraph.GraphBuffersChanged += OnGraphBuffersChanged;
-                textView.BufferGraph.GraphBufferContentTypeChanged += OnGraphBufferContentTypeChanged;
-            }
-        }
+		public ConnectionManager (ITextView textView,
+								 ICollection<Lazy<ITextViewConnectionListener, IContentTypeAndTextViewRoleMetadata>> nonWpfTextViewConnectionListeners,
+								 GuardedOperations guardedOperations)
+		{
+			if (textView == null) {
+				throw new ArgumentNullException (nameof (textView));
+			}
+			if (nonWpfTextViewConnectionListeners == null) {
+				throw new ArgumentNullException (nameof (nonWpfTextViewConnectionListeners));
+			}
+			if (guardedOperations == null) {
+				throw new ArgumentNullException (nameof (guardedOperations));
+			}
 
-        public void Close()
-        {
-            if (this.listeners.Count > 0)
-            {
-                foreach (var listener in this.listeners)
-                {
-                    Collection<ITextBuffer> subjectBuffers =
-                        _textView.BufferGraph.GetTextBuffers(buffer => (Match(listener.Metadata, buffer.ContentType)));
+			_textView = textView;
+			_guardedOperations = guardedOperations;
 
-                    if (subjectBuffers.Count > 0)
-                    {
-                        var instance = listener.Instance;
-                        if (instance != null)
-                        {
-                            _guardedOperations.CallExtensionPoint(instance,
-                                                                  () => instance.SubjectBuffersDisconnected(_textView, ConnectionReason.TextViewLifetime, subjectBuffers));
-                        }
-                    }
-                }
-                _textView.BufferGraph.GraphBuffersChanged -= OnGraphBuffersChanged;
-                _textView.BufferGraph.GraphBufferContentTypeChanged -= OnGraphBufferContentTypeChanged;
-            }
-        }
+			List<Lazy<ITextViewConnectionListener, IContentTypeAndTextViewRoleMetadata>> nonWpfFilteredListeners =
+								UIExtensionSelector.SelectMatchingExtensions (nonWpfTextViewConnectionListeners, _textView.Roles);
+			if (nonWpfFilteredListeners.Count > 0) {
+				foreach (var listenerExport in nonWpfFilteredListeners) {
+					var listener = new NonWpfListener (listenerExport, guardedOperations);
+					this.listeners.Add (listener);
 
-        private static bool Match(IContentTypeMetadata metadata, IContentType bufferContentType)
-        {
-            foreach (string listenerContentType in metadata.ContentTypes)
-            {
-                if (bufferContentType.IsOfType(listenerContentType))
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
+					Collection<ITextBuffer> subjectBuffers =
+						textView.BufferGraph.GetTextBuffers (buffer => (Match (listenerExport.Metadata, buffer.ContentType)));
 
-        private void OnGraphBuffersChanged(object sender, GraphBuffersChangedEventArgs args)
-        {
-            if (args.AddedBuffers.Count > 0)
-            {
-                foreach (Listener listener in this.listeners)
-                {
-                    Collection<ITextBuffer> subjectBuffers = new Collection<ITextBuffer>();
-                    foreach (ITextBuffer buffer in args.AddedBuffers)
-                    {
-                        if (Match(listener.Metadata, buffer.ContentType))
-                        {
-                            subjectBuffers.Add(buffer);
-                        }
-                    }
-                    if (subjectBuffers.Count > 0)
-                    {
-                        var instance = listener.Instance;
-                        if (instance != null)
-                        {
-                            _guardedOperations.CallExtensionPoint(instance,
-                                                                  () => instance.SubjectBuffersConnected(_textView, ConnectionReason.BufferGraphChange, subjectBuffers));
-                        }
-                    }
-                }
-            }
+					if (subjectBuffers.Count > 0) {
+						var instance = listener.ErrorSource;
+						if (instance != null) {
+							_guardedOperations.CallExtensionPoint (instance,
+																  () => listener.SubjectBuffersConnected (_textView, ConnectionReason.TextViewLifetime, subjectBuffers));
+						}
+					}
+				}
+			}
 
-            if (args.RemovedBuffers.Count > 0)
-            {
-                foreach (Listener listener in this.listeners)
-                {
-                    Collection<ITextBuffer> subjectBuffers = new Collection<ITextBuffer>();
-                    foreach (ITextBuffer buffer in args.RemovedBuffers)
-                    {
-                        if (Match(listener.Metadata, buffer.ContentType))
-                        {
-                            subjectBuffers.Add(buffer);
-                        }
-                    }
-                    if (subjectBuffers.Count > 0)
-                    {
-                        var instance = listener.Instance;
-                        if (instance != null)
-                        {
-                            _guardedOperations.CallExtensionPoint(instance,
-                                                                  () => instance.SubjectBuffersDisconnected(_textView, ConnectionReason.BufferGraphChange, subjectBuffers));
-                        }
-                    }
-                }
-            }
-        }
+			if (this.listeners.Count > 0) {
+				textView.BufferGraph.GraphBuffersChanged += OnGraphBuffersChanged;
+				textView.BufferGraph.GraphBufferContentTypeChanged += OnGraphBufferContentTypeChanged;
+			}
+		}
 
-        private void OnGraphBufferContentTypeChanged(object sender, GraphBufferContentTypeChangedEventArgs args)
-        {
-            var connectedListeners = new List<IWpfTextViewConnectionListener>();
-            var disconnectedListeners = new List<IWpfTextViewConnectionListener>();
+		public void Close ()
+		{
+			if (this.listeners.Count > 0) {
+				foreach (var listener in this.listeners) {
+					Collection<ITextBuffer> subjectBuffers =
+						_textView.BufferGraph.GetTextBuffers (buffer => (Match (listener.Metadata, buffer.ContentType)));
 
-            foreach (Listener listener in this.listeners)
-            {
-                bool beforeMatch = Match(listener.Metadata, args.BeforeContentType);
-                bool afterMatch = Match(listener.Metadata, args.AfterContentType);
-                if (beforeMatch != afterMatch)
-                {
-                    var instance = listener.Instance;
-                    if (instance != null)
-                    {
-                        if (beforeMatch)
-                        {
-                            disconnectedListeners.Add(instance);
-                        }
-                        else
-                        {
-                            connectedListeners.Add(instance);
-                        }
-                    }
-                }
-            }
+					if (subjectBuffers.Count > 0) {
+						var instance = listener.ErrorSource;
+						if (instance != null) {
+							_guardedOperations.CallExtensionPoint (instance,
+																  () => listener.SubjectBuffersDisconnected (_textView, ConnectionReason.TextViewLifetime, subjectBuffers));
+						}
+					}
+				}
+				_textView.BufferGraph.GraphBuffersChanged -= OnGraphBuffersChanged;
+				_textView.BufferGraph.GraphBufferContentTypeChanged -= OnGraphBufferContentTypeChanged;
+			}
+		}
 
-            Collection<ITextBuffer> subjectBuffers = new Collection<ITextBuffer>(new List<ITextBuffer>(1) { args.TextBuffer });
-            foreach (var instance in disconnectedListeners)
-            {
-                _guardedOperations.CallExtensionPoint(instance,
-                                                      () => instance.SubjectBuffersDisconnected(_textView, ConnectionReason.ContentTypeChange, subjectBuffers));
-            }
+		private static bool Match (IContentTypeMetadata metadata, IContentType bufferContentType)
+		{
+			foreach (string listenerContentType in metadata.ContentTypes) {
+				if (bufferContentType.IsOfType (listenerContentType)) {
+					return true;
+				}
+			}
+			return false;
+		}
 
-            foreach (var instance in connectedListeners)
-            {
-                _guardedOperations.CallExtensionPoint(instance,
-                                                      () => instance.SubjectBuffersConnected(_textView, ConnectionReason.ContentTypeChange, subjectBuffers));
-            }
-        }
-    }
+		private void OnGraphBuffersChanged (object sender, GraphBuffersChangedEventArgs args)
+		{
+			if (args.AddedBuffers.Count > 0) {
+				foreach (var listener in this.listeners) {
+					Collection<ITextBuffer> subjectBuffers = new Collection<ITextBuffer> ();
+					foreach (ITextBuffer buffer in args.AddedBuffers) {
+						if (Match (listener.Metadata, buffer.ContentType)) {
+							subjectBuffers.Add (buffer);
+						}
+					}
+					if (subjectBuffers.Count > 0) {
+						var instance = listener.ErrorSource;
+						if (instance != null) {
+							_guardedOperations.CallExtensionPoint (instance,
+																  () => listener.SubjectBuffersConnected (_textView, ConnectionReason.BufferGraphChange, subjectBuffers));
+						}
+					}
+				}
+			}
+
+			if (args.RemovedBuffers.Count > 0) {
+				foreach (BaseListener listener in this.listeners) {
+					Collection<ITextBuffer> subjectBuffers = new Collection<ITextBuffer> ();
+					foreach (ITextBuffer buffer in args.RemovedBuffers) {
+						if (Match (listener.Metadata, buffer.ContentType)) {
+							subjectBuffers.Add (buffer);
+						}
+					}
+					if (subjectBuffers.Count > 0) {
+						var instance = listener.ErrorSource;
+						if (instance != null) {
+							_guardedOperations.CallExtensionPoint (instance,
+																  () => listener.SubjectBuffersDisconnected (_textView, ConnectionReason.BufferGraphChange, subjectBuffers));
+						}
+					}
+				}
+			}
+		}
+
+		private void OnGraphBufferContentTypeChanged (object sender, GraphBufferContentTypeChangedEventArgs args)
+		{
+			var connectedListeners = new List<BaseListener> ();
+			var disconnectedListeners = new List<BaseListener> ();
+
+			foreach (BaseListener listener in this.listeners) {
+				bool beforeMatch = Match (listener.Metadata, args.BeforeContentType);
+				bool afterMatch = Match (listener.Metadata, args.AfterContentType);
+				if (beforeMatch != afterMatch) {
+					if (listener.ErrorSource != null) {
+						if (beforeMatch) {
+							disconnectedListeners.Add (listener);
+						}
+						else {
+							connectedListeners.Add (listener);
+						}
+					}
+				}
+			}
+
+			Collection<ITextBuffer> subjectBuffers = new Collection<ITextBuffer> (new List<ITextBuffer> (1) { args.TextBuffer });
+			foreach (var listener in disconnectedListeners) {
+				_guardedOperations.CallExtensionPoint (listener.ErrorSource,
+													  () => listener.SubjectBuffersDisconnected (_textView, ConnectionReason.ContentTypeChange, subjectBuffers));
+			}
+
+			foreach (var listener in connectedListeners) {
+				_guardedOperations.CallExtensionPoint (listener.ErrorSource,
+													  () => listener.SubjectBuffersConnected (_textView, ConnectionReason.ContentTypeChange, subjectBuffers));
+			}
+		}
+	}
 }

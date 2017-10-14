@@ -46,7 +46,7 @@ namespace Microsoft.VisualStudio.Platform
         [Import]
         internal ITextBufferFactoryService _textBufferFactoryService { get; private set; }
 
-		public ITextBufferFactoryService2 TextBufferFactoryService => (ITextBufferFactoryService2)_textBufferFactoryService;
+		public ITextBufferFactoryService3 TextBufferFactoryService => (ITextBufferFactoryService3)_textBufferFactoryService;
 
 		[Import]
         internal ITextDocumentFactoryService TextDocumentFactoryService { get; private set; }
@@ -65,30 +65,6 @@ namespace Microsoft.VisualStudio.Platform
 
         [Import]
         internal IClassifierAggregatorService ClassifierAggregatorService { get; private set; }
-    }
-
-    [Export(typeof(IThreadHelper))]
-    public class PlatformThreadHelper : IThreadHelper
-    {
-        public Task RunOnUIThread(Action action)
-        {
-            return MonoDevelop.Core.Runtime.RunInMainThread(action);
-        }
-
-        public Task RunOnUIThread(UIThreadPriority priority, Action action)
-        {
-            return MonoDevelop.Core.Runtime.RunInMainThread(action);
-        }
-
-        public Task<T> RunOnUIThread<T>(Func<T> function)
-        {
-            return MonoDevelop.Core.Runtime.RunInMainThread(function);
-        }
-
-        public Task<T> RunOnUIThread<T>(UIThreadPriority priority, Func<T> function)
-        {
-            return MonoDevelop.Core.Runtime.RunInMainThread(function);
-        }
     }
 
     public interface IMimeToContentTypeRegistryService
@@ -356,69 +332,4 @@ namespace Microsoft.VisualStudio.Platform
 
         int _end;
     }
-
-#if false
-    [Export(typeof(ITaggerProvider))]
-    [ContentType("text")]
-    [TagType(typeof(IClassificationTag))]
-    public class TestClassifierProvider : ITaggerProvider
-    {
-        [Import]
-        internal IClassificationTypeRegistryService ClassificationTypeRegistryService { get; private set; }
-
-        [Export]
-        [Name("keyword")]
-        public ClassificationTypeDefinition textClassificationType;
-
-        public ITagger<T> CreateTagger<T>(ITextBuffer buffer) where T : ITag
-        {
-            return buffer.Properties.GetOrCreateSingletonProperty(typeof(TestClassifier), () => new TestClassifier(this)) as ITagger<T>;
-        }
-    }
-
-    public class TestClassifier : ITagger<IClassificationTag>
-    {
-        private ClassificationTag _keyword { get; }
-
-        public TestClassifier(TestClassifierProvider provider)
-        {
-            _keyword = new ClassificationTag(provider.ClassificationTypeRegistryService.GetClassificationType("keyword"));
-        }
-
-        public IEnumerable<ITagSpan<IClassificationTag>> GetTags(NormalizedSnapshotSpanCollection spans)
-        {
-            foreach (var span in spans)
-            {
-                int start = -1;
-                for (int i = span.Start; (i < span.End); ++i)
-                {
-                    var c = span.Snapshot[i];
-                    if ((c == 'a') || (c == 'A'))
-                    {
-                        if (start == -1)
-                        {
-                            start = i;
-                        }
-                    }
-                    else if (start != -1)
-                    {
-                        yield return new TagSpan<ClassificationTag>(
-                                new SnapshotSpan(span.Snapshot, start, i - start),
-                                _keyword);
-                        start = -1;
-                    }
-                }
-
-                if (start != -1)
-                {
-                    yield return new TagSpan<ClassificationTag>(
-                            new SnapshotSpan(span.Snapshot, start, span.End - start),
-                            _keyword);
-                }
-            }
-        }
-
-        public event EventHandler<SnapshotSpanEventArgs> TagsChanged;
-    }
-#endif
 }
