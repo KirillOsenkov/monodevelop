@@ -215,20 +215,20 @@ namespace MonoDevelop.Components.Docking
 		{
 			switch (position) {
 				case DockPositionType.Top:
-				if (toolbarTop == null)
-					toolbarTop = new DockItemToolbar (this, DockPositionType.Top);
+					if (toolbarTop == null)
+						toolbarTop = new DockItemToolbar (this, DockPositionType.Top);
 					return toolbarTop;
 				case DockPositionType.Bottom:
 					if (toolbarBottom == null)
-					                     toolbarBottom = new DockItemToolbar (this, DockPositionType.Bottom);
+						toolbarBottom = new DockItemToolbar (this, DockPositionType.Bottom);
 					return toolbarBottom;
 				case DockPositionType.Left:
 					if (toolbarLeft == null)
-					                     toolbarLeft = new DockItemToolbar (this, DockPositionType.Left);
+						toolbarLeft = new DockItemToolbar (this, DockPositionType.Left);
 					return toolbarLeft;
 				case DockPositionType.Right:
 					if (toolbarRight == null)
-					                     toolbarRight = new DockItemToolbar (this, DockPositionType.Right);
+						toolbarRight = new DockItemToolbar (this, DockPositionType.Right);
 					return toolbarRight;
 				default: throw new ArgumentException ();
 			}
@@ -544,6 +544,11 @@ namespace MonoDevelop.Components.Docking
 
 		internal void ShowDockPopupMenu (Gtk.Widget parent, Gdk.EventButton evt)
 		{
+			ShowDockPopupMenu (parent, evt.X, evt.Y);
+		}
+
+		internal void ShowDockPopupMenu (Gtk.Widget parent, double x, double y)
+		{
 			var menu = new ContextMenu ();
 			ContextMenuItem citem;
 
@@ -580,7 +585,7 @@ namespace MonoDevelop.Components.Docking
 			}
 
 			ShowingContextMenu = true;
-			menu.Show (parent, evt, () => { ShowingContextMenu = true; });
+			menu.Show (parent, (int)x,  (int)y, () => { ShowingContextMenu = true; });
 		}
 	}
 

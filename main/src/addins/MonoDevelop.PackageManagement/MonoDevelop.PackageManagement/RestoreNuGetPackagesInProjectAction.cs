@@ -30,6 +30,7 @@ using MonoDevelop.Core;
 using MonoDevelop.Projects;
 using NuGet.PackageManagement;
 using NuGet.ProjectManagement;
+using NuGet.Protocol.Core.Types;
 
 namespace MonoDevelop.PackageManagement
 {
@@ -59,6 +60,10 @@ namespace MonoDevelop.PackageManagement
 			);
 		}
 
+		public PackageActionType ActionType {
+			get { return PackageActionType.Restore; }
+		}
+
 		public void Execute ()
 		{
 			Execute (CancellationToken.None);
@@ -80,11 +85,15 @@ namespace MonoDevelop.PackageManagement
 		async Task ExecuteAsync (CancellationToken cancellationToken)
 		{
 			using (var monitor = new PackageRestoreMonitor (restoreManager)) {
-				await restoreManager.RestoreMissingPackagesAsync (
-					solutionManager.SolutionDirectory,
-					nugetProject,
-					new NuGetProjectContext (),
-					cancellationToken);
+				using (var cacheContext = new SourceCacheContext ()) {
+					var downloadContext = new PackageDownloadContext (cacheContext);
+					await restoreManager.RestoreMissingPackagesAsync (
+						solutionManager.SolutionDirectory,
+						nugetProject,
+						new NuGetProjectContext (),
+						downloadContext,
+						cancellationToken);
+				}
 			}
 
 			await Runtime.RunInMainThread (() => RefreshProjectReferences ());

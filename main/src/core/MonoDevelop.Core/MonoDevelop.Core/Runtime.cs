@@ -137,6 +137,7 @@ namespace MonoDevelop.Core
 				Counters.RuntimeInitialization.Trace ("Initializing Assembly Service");
 				systemAssemblyService = new SystemAssemblyService ();
 				systemAssemblyService.Initialize ();
+				LoadMSBuildLibraries ();
 				
 				initialized = true;
 				
@@ -428,6 +429,22 @@ namespace MonoDevelop.Core
 				throw new InvalidOperationException ("Operation not supported in background thread");
 		}
 
+		/// <summary>
+		/// Asserts that the current thread is the main thread. It will log a warning if it isn't.
+		/// </summary>
+		public static void CheckMainThread ()
+		{
+			if (IsMainThread) {
+				return;
+			}
+
+			if (System.Diagnostics.Debugger.IsAttached) {
+				System.Diagnostics.Debugger.Break ();
+			}
+
+			LoggingService.LogWarning ("Operation not supported in background thread. Location: " + Environment.StackTrace);
+		}
+
 		public static void SetProcessName (string name)
 		{
 			if (!Platform.IsMac && !Platform.IsWindows) {
@@ -461,6 +478,36 @@ namespace MonoDevelop.Core
 		}
 		
 		public static event EventHandler ShuttingDown;
+
+		static void LoadMSBuildLibraries ()
+		{
+			// Explicitly load the msbuild libraries since they are not installed in the GAC
+			var path = systemAssemblyService.CurrentRuntime.GetMSBuildBinPath ("15.0");
+			SystemAssemblyService.LoadAssemblyFrom (System.IO.Path.Combine (path, "Microsoft.Build.dll"));
+			SystemAssemblyService.LoadAssemblyFrom (System.IO.Path.Combine (path, "Microsoft.Build.Framework.dll"));
+			SystemAssemblyService.LoadAssemblyFrom (System.IO.Path.Combine (path, "Microsoft.Build.Utilities.Core.dll"));
+
+			if (Type.GetType ("Mono.Runtime") == null) {
+				AppDomain.CurrentDomain.AssemblyResolve += CurrentDomain_AssemblyResolve;
+			}
+		}
+
+		/// <summary>
+		/// This is necessary on Windows because without it, even though the assemblies are already loaded
+		/// the CLR will still throw FileNotFoundException (unable to load assembly).
+		/// </summary>
+		static System.Reflection.Assembly CurrentDomain_AssemblyResolve (object sender, ResolveEventArgs args)
+		{
+			if (args.Name != null && args.Name.StartsWith ("Microsoft.Build", StringComparison.OrdinalIgnoreCase)) {
+				foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies ()) {
+					if (string.Equals (assembly.FullName, args.Name, StringComparison.OrdinalIgnoreCase)) {
+						return assembly;
+					}
+				}
+			}
+
+			return null;
+		}
 	}
 	
 	internal static class Counters
@@ -500,7 +547,7 @@ namespace MonoDevelop.Core
 		public readonly ConfigurationProperty<bool> EnableAutomatedTesting = ConfigurationProperty.Create ("MonoDevelop.EnableAutomatedTesting", false);
 		public readonly ConfigurationProperty<string> UserInterfaceLanguage = ConfigurationProperty.Create ("MonoDevelop.Ide.UserInterfaceLanguage", "");
 		public readonly ConfigurationProperty<MonoDevelop.Projects.MSBuild.MSBuildVerbosity> MSBuildVerbosity = ConfigurationProperty.Create ("MonoDevelop.Ide.MSBuildVerbosity", MonoDevelop.Projects.MSBuild.MSBuildVerbosity.Normal);
-		public readonly ConfigurationProperty<bool> BuildWithMSBuild = ConfigurationProperty.Create ("MonoDevelop.Ide.BuildWithMSBuild", false);
+		public readonly ConfigurationProperty<bool> BuildWithMSBuild = ConfigurationProperty.Create ("MonoDevelop.Ide.BuildWithMSBuild", true);
 		public readonly ConfigurationProperty<bool> ParallelBuild = ConfigurationProperty.Create ("MonoDevelop.ParallelBuild", true);
 
 		public readonly ConfigurationProperty<string> AuthorName = ConfigurationProperty.Create ("Author.Name", Environment.UserName, oldName:"ChangeLogAddIn.Name");
@@ -508,5 +555,11 @@ namespace MonoDevelop.Core
 		public readonly ConfigurationProperty<string> AuthorCopyright = ConfigurationProperty.Create ("Author.Copyright", (string) null);
 		public readonly ConfigurationProperty<string> AuthorCompany = ConfigurationProperty.Create ("Author.Company", "");
 		public readonly ConfigurationProperty<string> AuthorTrademark = ConfigurationProperty.Create ("Author.Trademark", "");
+
+		/// <summary>
+		/// Gets or sets a value indicating whether the updater should be enabled for the current session.
+		/// This value won't be stored in the user preferences.
+		/// </summary>
+		public bool EnableUpdaterForCurrentSession { get; set; } = true;
 	}
 }

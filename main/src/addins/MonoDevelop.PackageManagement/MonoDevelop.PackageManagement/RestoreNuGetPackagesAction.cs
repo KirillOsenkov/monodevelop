@@ -51,8 +51,10 @@ namespace MonoDevelop.PackageManagement
 		{
 			this.solution = solution;
 			packageManagementEvents = PackageManagementServices.PackageManagementEvents;
+			RestorePackagesConfigProjects = true;
 
 			solutionManager = PackageManagementServices.Workspace.GetSolutionManager (solution);
+			solutionManager.ClearProjectCache ();
 
 			nugetProjects = solutionManager.GetNuGetProjects ().ToList ();
 
@@ -64,10 +66,8 @@ namespace MonoDevelop.PackageManagement
 				);
 			}
 
-			if (AnyProjectsUsingProjectJson ()) {
-				buildIntegratedRestorer = new MonoDevelopBuildIntegratedRestorer (
-					solutionManager.CreateSourceRepositoryProvider (),
-					solutionManager.Settings);
+			if (AnyDotNetCoreProjectsOrProjectsUsingProjectJson ()) {
+				buildIntegratedRestorer = new MonoDevelopBuildIntegratedRestorer (solutionManager);
 			}
 
 			if (AnyNuGetAwareProjects ()) {
@@ -75,13 +75,12 @@ namespace MonoDevelop.PackageManagement
 			}
 		}
 
-
 		bool AnyProjectsUsingPackagesConfig ()
 		{
 			return nugetProjects.Any (project => !(project is BuildIntegratedNuGetProject));
 		}
 
-		bool AnyProjectsUsingProjectJson ()
+		bool AnyDotNetCoreProjectsOrProjectsUsingProjectJson ()
 		{
 			return GetBuildIntegratedNuGetProjects ().Any ();
 		}
@@ -95,6 +94,12 @@ namespace MonoDevelop.PackageManagement
 		{
 			nugetAwareProjects = solution.GetAllProjects ().OfType<INuGetAwareProject> ().ToList ();
 			return nugetAwareProjects.Any ();
+		}
+
+		public bool RestorePackagesConfigProjects { get; set; }
+
+		public PackageActionType ActionType {
+			get { return PackageActionType.Restore; }
 		}
 
 		public void Execute ()
@@ -117,7 +122,7 @@ namespace MonoDevelop.PackageManagement
 
 		async Task ExecuteAsync (CancellationToken cancellationToken)
 		{
-			if (restoreManager != null) {
+			if (restoreManager != null && RestorePackagesConfigProjects) {
 				using (var monitor = new PackageRestoreMonitor (restoreManager)) {
 					await restoreManager.RestoreMissingPackagesInSolutionAsync (
 						solutionManager.SolutionDirectory,

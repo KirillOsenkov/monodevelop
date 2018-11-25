@@ -11,31 +11,32 @@ check_mono_version (const char *version, const char *req_version)
 {
 	char *req_end, *end;
 	long req_val, val;
-	
-	while (*req_version) {
+
+	while (*req_version && *version) {
 		req_val = strtol (req_version, &req_end, 10);
 		if (req_version == req_end || (*req_end && *req_end != '.')) {
 			fprintf (stderr, "Bad version requirement string '%s'\n", req_end);
 			return FALSE;
 		}
-		
-		req_version = req_end;
-		if (*req_version)
-			req_version++;
-		
+
 		val = strtol (version, &end, 10);
 		if (version == end || val < req_val)
 			return FALSE;
-		
-		if (val > req_val)
+
+		if (val > req_val) {
 			return TRUE;
-		
-		if (*req_version == '.' && *end != '.')
+		}
+
+		if (*req_end == '.' && *end != '.')
 			return FALSE;
-		
+
+		req_version = req_end;
+		if (*req_version)
+			req_version++;
+
 		version = end + 1;
 	}
-	
+
 	return TRUE;
 }
 
@@ -45,13 +46,13 @@ str_append (const char *base, const char *append)
 	size_t baselen = strlen (base);
 	size_t len = strlen (append);
 	char *buf;
-	
-	if (!(buf = malloc (baselen + len + 1)))
+
+	if (!(buf = (char *)malloc (baselen + len + 1)))
 		return NULL;
-	
+
 	memcpy (buf, base, baselen);
 	strcpy (buf + baselen, append);
-	
+
 	return buf;
 }
 
@@ -63,7 +64,8 @@ xcode_get_dev_path ()
 	if ((len = readlink ("/var/db/xcode_select_link", (char*) &buf, PATH_MAX)) > 0) {
 		return strndup (buf, len);
 	}
-	return NULL;
+
+	return strdup("/Applications/Xcode.app/Contents/Developer");
 }
 
 static char *
@@ -161,7 +163,7 @@ push_env (const char *variable, const char *value, BOOL push_to_end)
 			}
 		}
 
-		if (!(buf = malloc (len + current_length + 2)))
+		if (!(buf = (char *)malloc (len + current_length + 2)))
 			return NO;
 
 		if (push_to_end) {
@@ -260,6 +262,9 @@ update_environment (const char *contentsDir, bool need64Bit)
 	}
 
 	if (push_env_to_start ("PATH", "/Library/Frameworks/Mono.framework/Commands"))
+		updated = YES;
+
+	if (push_env_to_end ("PATH", "/usr/local/bin"))
 		updated = YES;
 
 	if (need64Bit) {

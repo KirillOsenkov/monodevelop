@@ -72,17 +72,23 @@ namespace MonoDevelop.PackageManagement
 			if (nugetAwareProject != null)
 				return nugetAwareProject.CreateNuGetProject ();
 
+			NuGetProject dotNetCoreProject = DotNetCoreNuGetProject.Create (project);
+			if (dotNetCoreProject != null)
+				return dotNetCoreProject;
+
+			NuGetProject packageReferenceProject = PackageReferenceNuGetProject.Create (project);
+			if (packageReferenceProject != null)
+				return packageReferenceProject;
+
 			var projectSystem = new MonoDevelopMSBuildNuGetProjectSystem (project, context);
 
 			string projectJsonPath = ProjectJsonPathUtilities.GetProjectConfigPath (project.BaseDirectory, project.Name);
 
 			if (File.Exists (projectJsonPath)) {
-				return new BuildIntegratedProjectSystem (
+				return new ProjectJsonBuildIntegratedNuGetProject (
 					projectJsonPath,
 					project.FileName,
 					project,
-					projectSystem,
-					project.Name,
 					settings);
 			}
 
@@ -91,7 +97,7 @@ namespace MonoDevelop.PackageManagement
 
 			string packagesConfigFolderPath = project.BaseDirectory;
 
-			return new MSBuildNuGetProject (
+			return new MonoDevelopMSBuildNuGetProject (
 				projectSystem, 
 				folderNuGetProjectFullPath, 
 				packagesConfigFolderPath);

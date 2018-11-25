@@ -1,5 +1,6 @@
 ﻿namespace MonoDevelop.FSharp.Shared
 
+open Microsoft.FSharp.Compiler
 open Microsoft.FSharp.Compiler.SourceCodeServices
 open Microsoft.FSharp.Compiler.Interactive.Shell
 open System
@@ -47,28 +48,28 @@ module Completion =
 
     let symbolToIcon (symbolUse:FSharpSymbolUse) =
         match symbolUse with
-        | ActivePatternCase _ -> "ActivePatternCase"
-        | Field _ -> "Field"
-        | UnionCase _ -> "UnionCase"
-        | Class _ -> "Class"
-        | Delegate _ -> "Delegate"
-        | Constructor _  -> "Constructor"
-        | Event _ -> "Event"
-        | Property _ -> "Property"
-        | Function f ->
+        | SymbolUse.ActivePatternCase _ -> "ActivePatternCase"
+        | SymbolUse.Field _ -> "Field"
+        | SymbolUse.UnionCase _ -> "UnionCase"
+        | SymbolUse.Class _ -> "Class"
+        | SymbolUse.Delegate _ -> "Delegate"
+        | SymbolUse.Constructor _  -> "Constructor"
+        | SymbolUse.Event _ -> "Event"
+        | SymbolUse.Property _ -> "Property"
+        | SymbolUse.Function f ->
             if f.IsExtensionMember then "ExtensionMethod"
             elif f.IsMember then "Method"
             else "Field"
-        | Operator _ -> "Operator"
-        | ClosureOrNestedFunction _ -> "ClosureOrNestedFunction"
-        | Val _ -> "Val"
-        | Enum _ -> "Enum"
-        | Interface _ -> "Interface"
-        | Module _ -> "Module"
-        | Namespace _ -> "Namespace"
-        | Record _ -> "Record"
-        | Union _ -> "Union"
-        | ValueType _ -> "ValueType"
+        | SymbolUse.Operator _ -> "Operator"
+        | SymbolUse.ClosureOrNestedFunction _ -> "ClosureOrNestedFunction"
+        | SymbolUse.Val _ -> "Val"
+        | SymbolUse.Enum _ -> "Enum"
+        | SymbolUse.Interface _ -> "Interface"
+        | SymbolUse.Module _ -> "Module"
+        | SymbolUse.Namespace _ -> "Namespace"
+        | SymbolUse.Record _ -> "Record"
+        | SymbolUse.Union _ -> "Union"
+        | SymbolUse.ValueType _ -> "ValueType"
         | SymbolUse.Entity _ -> "Entity"
         | _ -> "Event"
 
@@ -151,18 +152,21 @@ module Completion =
 
     let getCompletions (fsiSession: FsiEvaluationSession, input:string, column: int) =
         async {
-            let parseResults, checkResults, _checkProjectResults = fsiSession.ParseAndCheckInteraction(input)
+            let! parseResults, checkResults, _checkProjectResults = fsiSession.ParseAndCheckInteraction(input)
             let longName,residue = Parsing.findLongIdentsAndResidue(column, input)
             if residue.Length > 0 && residue.[0] = '#' then
-                return hashDirectives
+                return hashDirectives |> Array.ofList
             else
-                let! symbols = checkResults.GetDeclarationListSymbols(Some parseResults, 1, column, input, longName, residue, fun (_,_) -> false)
+                let partialName = QuickParse.GetPartialLongNameEx(input, column-1)
+
+                let! symbols = checkResults.GetDeclarationListSymbols(Some parseResults, 1, input, partialName)
+
                 let results = symbols
                               |> List.choose symbolToCompletionData
 
                 let completions, symbols = results |> List.unzip
                 symbolList <- symbols
-                return completions
+                return completions |> Array.ofList
         }
 
     let getCompletionTooltip filter =
@@ -185,7 +189,7 @@ module Completion =
 
     let getParameterHints (fsiSession: FsiEvaluationSession, input:string, column: int) =
         async {
-            let _parseResults, checkResults, _checkProjectResults = fsiSession.ParseAndCheckInteraction("();;")
+            let! _parseResults, checkResults, _checkProjectResults = fsiSession.ParseAndCheckInteraction("();;")
 
             let lineToCaret = input.[0..column-1]
             let column = lineToCaret |> Seq.tryFindIndexBack (fun c -> c <> '(' && c <> ' ')

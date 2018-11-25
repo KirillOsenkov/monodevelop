@@ -268,7 +268,7 @@ namespace MonoDevelop.Ide.Gui.Components
 			buffer.TagTable.Add (debugTag);
 
 			consoleLogTag = new TextTag ("consoleLog");
-			consoleLogTag.Foreground = Styles.DimTextColor.ToHexString (false);
+			consoleLogTag.Foreground = Styles.SecondaryTextColor.ToHexString (false);
 			buffer.TagTable.Add (consoleLogTag);
 			
 			tag = new TextTag ("0");
@@ -479,7 +479,12 @@ namespace MonoDevelop.Ide.Gui.Components
 
 		public OutputProgressMonitor GetProgressMonitor ()
 		{
-			return new LogViewProgressMonitor (this);
+			return GetProgressMonitor (clearConsole: true);
+		}
+
+		internal OutputProgressMonitor GetProgressMonitor (bool clearConsole)
+		{
+			return new LogViewProgressMonitor (this, clearConsole);
 		}
 
 		public void Clear ()
@@ -751,10 +756,11 @@ namespace MonoDevelop.Ide.Gui.Components
 			get { return outputPad; }
 		}
 		
-		internal LogViewProgressMonitor (LogView pad): base (Runtime.MainSynchronizationContext)
+		internal LogViewProgressMonitor (LogView pad, bool clearConsole): base (Runtime.MainSynchronizationContext)
 		{
 			outputPad = pad;
-			outputPad.Clear ();
+			if (clearConsole)
+				outputPad.Clear ();
 			internalLogger.TextWritten += outputPad.WriteConsoleLogText;
 			console = new LogViewProgressConsole (this);
 		}

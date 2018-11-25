@@ -7,6 +7,7 @@ using System.Net;
 using System.IO;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using System.Linq;
 
 namespace MonoDevelop.Core.Execution
 {
@@ -282,6 +283,11 @@ namespace MonoDevelop.Core.Execution
 			return Task.Run (() => {
 				var cmd = Runtime.ProcessService.CreateCommand (exePath);
 				cmd.Arguments = ((IPEndPoint)listener.LocalEndpoint).Port + " " + DebugMode;
+
+				// Explicitly propagate the PATH var to the process. It ensures that tools required
+				// to run XS are also in the PATH for remote processes.
+				cmd.EnvironmentVariables ["PATH"] = Environment.GetEnvironmentVariable ("PATH");
+
 				process = executionHandler.Execute (cmd, console);
 				process.Task.ContinueWith (t => ProcessExited ());
 			});
@@ -459,7 +465,7 @@ namespace MonoDevelop.Core.Execution
 				connection.Close ();
 				connection = null;
 			}
-			process.Cancel ();
+			process?.Cancel ();
 		}
 
 		void OnConnected (IAsyncResult res)
@@ -508,29 +514,62 @@ namespace MonoDevelop.Core.Execution
 					return;
 				}
 
-				lock (pendingMessageTasks) {
-					var t = Task.Run (() => {
-						msg = LoadMessageData (msg);
-						if (type == 0)
-							ProcessResponse (msg);
-						else
-							ProcessRemoteMessage (msg);
-					});
-					t.ContinueWith (ta => {
-						lock (pendingMessageTasks) {
-							pendingMessageTasks.Remove (ta);
-						}
-					}).Ignore ();
+				HandleMessage (msg, type);
+			}
+		}
+
+		async void HandleMessage (BinaryMessage msg, byte type)
+		{
+			var t = Task.Run (() => {
+				msg = LoadMessageData (msg);
+				if (type == 0)
+					ProcessResponse (msg);
+				else
+					ProcessRemoteMessage (msg);
+			});
+
+			try {
+				lock (pendingMessageTasks)
 					pendingMessageTasks.Add (t);
-				}
+
+				await t.ConfigureAwait (false);
+			} catch (Exception e) {
+				LoggingService.LogError ("RemoteProcessConnection.HandleMessage failed", e);
+			} finally {
+				lock (pendingMessageTasks)
+					pendingMessageTasks.Remove (t);
 			}
 		}
 
 		List<Task> pendingMessageTasks = new List<Task> ();
 
+		/// <summary>
+		/// Waits for all messages received from the server to be processed.
+		/// Useful for example to ensure that all logging messages sent by
+		/// the server during a build operation are processed before closing the
+		/// connection.
+		/// </summary>
+		/// <returns>The pending messages.</returns>
 		public Task ProcessPendingMessages ()
 		{
-			return Task.WhenAll (pendingMessageTasks.ToArray ());
+			lock (pendingMessageTasks)
+				return Task.WhenAll (pendingMessageTasks.ToArray ());
+		}
+
+		/// <summary>
+		/// Waits for all queued messages to be processed. That is, when the
+		/// returned task completes, all messages in progess will have received
+		/// a response and all responses will have been processed.
+		/// </summary>
+		/// <returns>The queued messages.</returns>
+		public async Task ProcessQueuedMessages ()
+		{
+			Task[] waiters;
+			lock (messageWaiters)
+				waiters = messageWaiters.Values.Select (w => w.TaskSource.Task).ToArray ();
+
+			await Task.WhenAll (waiters);
+			await ProcessPendingMessages ();
 		}
 
 		BinaryMessage LoadMessageData (BinaryMessage msg)
@@ -547,9 +586,9 @@ namespace MonoDevelop.Core.Execution
 		void ProcessResponse (BinaryMessage msg)
 		{
 			DateTime respTime = DateTime.Now;
+			MessageRequest req;
 
 			lock (messageWaiters) {
-				MessageRequest req;
 				if (messageWaiters.TryGetValue (msg.Id, out req)) {
 					messageWaiters.Remove (msg.Id);
 					try {
@@ -568,12 +607,15 @@ namespace MonoDevelop.Core.Execution
 						LogMessage (MessageType.Response, msg, time);
 					}
 
-					if (!req.Request.OneWay)
-						NotifyResponse (req, msg);
-				}
-				else if (DebugMode)
+				} else if (DebugMode) {
+					req = null;
 					LogMessage (MessageType.Response, msg, -1);
+				}
 			}
+
+			// Notify the response outside the lock to avoid deadlocks
+			if (req != null && !req.Request.OneWay)
+				NotifyResponse (req, msg);
 		}
 
 		void NotifyResponse (MessageRequest req, BinaryMessage res)
@@ -602,10 +644,11 @@ namespace MonoDevelop.Core.Execution
 				return;
 			}
 
-			Runtime.RunInMainThread (delegate {
-				if (MessageReceived != null)
-					MessageReceived (null, new MessageEventArgs () { Message = msg });
-			});
+			if (MessageReceived != null) {
+				Runtime.RunInMainThread (delegate {
+					MessageReceived?.Invoke (null, new MessageEventArgs () { Message = msg });
+				});
+			}
 
 			try {
 				foreach (var li in listeners) {

@@ -26,7 +26,7 @@ type SymbolLookupKind =
     | ByLongIdent
     | Simple
 
-type internal DraftToken =
+type DraftToken =
     { Kind: SymbolKind
       Token: FSharpTokenInfo
       RightColumn: int }
@@ -46,7 +46,7 @@ module Lexer =
                 | Some _, newLexState ->
                     loop lineTokenizer newLexState
 
-            let sourceTokenizer = SourceTokenizer(defines, None)
+            let sourceTokenizer = FSharpSourceTokenizer(defines, None)
             let lines = String.getLines source
             let mutable lexState = 0L
             for line in lines do
@@ -69,7 +69,6 @@ module Lexer =
                 // OPTIMIZE: if the new document has the current document as a prefix,
                 // we can reuse lexing results and process only the added part.
                 | _ ->
-                    printfn "queryLexState: lexing current document"
                     let lexStates = getLexStates defines source
                     currentDocumentState := Some (lexStates, source, defines)
                     lexStates
@@ -83,7 +82,7 @@ module Lexer =
         let defines =
             args |> Seq.choose (fun s -> if s.StartsWith "--define:" then Some s.[9..] else None)
                  |> Seq.toList
-        let sourceTokenizer = SourceTokenizer(defines, None)
+        let sourceTokenizer = FSharpSourceTokenizer(defines, None)
         let lineTokenizer = sourceTokenizer.CreateLineTokenizer lineStr
         let rec loop lexState acc =
             match lineTokenizer.ScanToken lexState with
@@ -119,7 +118,7 @@ module Lexer =
     // Statically resolved type parameters: we convert INFIX_AT_HAT_OP + IDENT tokens into single IDENT token, altering its LeftColumn
     // and FullMathedLength (for "^type" which is tokenized as (INFIX_AT_HAT_OP, left=2) + (IDENT, left=3, length=4)
     // we'll get (IDENT, left=2, length=5).
-    let internal fixTokens lineStr (tokens : FSharpTokenInfo list) =
+    let fixTokens lineStr (tokens : FSharpTokenInfo list) =
         tokens
         |> List.fold (fun (acc, lastToken) token ->
             match lastToken with
@@ -155,7 +154,7 @@ module Lexer =
     
     let getTokensWithInitialState state lines filename defines =
         [ let mutable state = state
-          let sourceTok = SourceTokenizer(defines, filename)
+          let sourceTok = FSharpSourceTokenizer(defines, filename)
           for lineText in lines do
               let tokenizer = sourceTok.CreateLineTokenizer(lineText)
               let rec parseLine() =
@@ -165,7 +164,7 @@ module Lexer =
                         yield tok
                         yield! parseLine()
                     | None, nstate -> state <- nstate ]
-              yield parseLine(), state ]
+              yield parseLine(), lineText ]
     
     let findTokenAt col (tokens:FSharpTokenInfo list) =
         let isTokenAtOffset col (t:FSharpTokenInfo) = col-1 >= t.LeftColumn && col-1 <= t.RightColumn
@@ -195,18 +194,22 @@ module Lexer =
             // Try to find start column of the long identifiers
             // Assume that tokens are ordered in an decreasing order of start columns
             let rec tryFindStartColumn tokens =
-               match tokens with
-               | {Kind = Ident; Token = t1} :: {Kind = Operator; Token = t2} :: remainingTokens ->
+                match tokens with
+                | {Kind = SymbolKind.Other; Token = t1 } :: _ when t1.CharClass = FSharpTokenCharKind.Operator ->
+                    Some t1.LeftColumn
+                | {Kind = SymbolKind.Other; Token = t1 } :: remainingTokens when t1.Tag = FSharpTokenTag.DOT ->
+                    tryFindStartColumn remainingTokens
+                | {Kind = Ident; Token = t1} :: {Kind = SymbolKind.Other; Token = t2} :: remainingTokens ->
                     if t2.Tag = FSharpTokenTag.DOT then
                         tryFindStartColumn remainingTokens
                     else
                         Some t1.LeftColumn
-               | {Kind = Ident; Token = t} :: _ ->
-                   Some t.LeftColumn
-               | {Kind = SymbolKind.Other; Token = t} :: _ when t.TokenName = "HASH" ->
-                   Some t.LeftColumn
-               | _ :: _ | [] ->
-                   None
+                | {Kind = Ident; Token = t} :: _ ->
+                    Some t.LeftColumn
+                | {Kind = SymbolKind.Other; Token = t} :: _ when t.TokenName = "HASH" ->
+                    Some t.LeftColumn
+                | _ :: _ | [] ->
+                    None
             let decreasingTokens =
                 match tokensUnderCursor |> List.sortBy (fun token -> - token.Token.LeftColumn) with
                 // Skip the first dot if it is the start of the identifier

@@ -1,11 +1,9 @@
 namespace MonoDevelopTests
 open System.Text.RegularExpressions
-open System.Threading
 open NUnit.Framework
 open FsUnit
 open MonoDevelop.FSharp.MonoDevelop
 open MonoDevelop.FSharp
-
 [<TestFixture>]
 type TestTooltipProvider() =
     let stripHtml html =
@@ -16,14 +14,18 @@ type TestTooltipProvider() =
          .Replace("&gt;", ">")
          .Replace("&apos;", "'")
 
-    let getTooltip (source: string) =
-        let offset = source.IndexOf("§")
-        let source = source.Replace("§", "")
+    let getSymbol (source: string) =
+        let offset = source.IndexOf("$")
+        let source = source.Replace("$", "")
 
         let doc = TestHelpers.createDoc source ""
         let line, col, lineStr = doc.Editor.GetLineInfoFromOffset offset
 
         let symbolUse = doc.Ast.GetSymbolAtLocation(line, col - 1, lineStr) |> Async.RunSynchronously
+        lineStr, col, symbolUse, doc.Editor
+
+    let getTooltip source =
+        let _, _, symbolUse, _ = getSymbol source
         symbolUse |> Option.bind SymbolTooltips.getTooltipFromSymbolUse
 
     let getTooltipSignature (source: string) =
@@ -45,11 +47,38 @@ type TestTooltipProvider() =
         | _ ->  ""
 
     [<Test>]
+    member this.``Namespace has correct segment``() =
+        let line, col, symbolUse, editor = getSymbol "open Sys$tem"
+        let segment = Symbols.getTextSegment editor symbolUse.Value col line
+        segment.Offset |> should equal 5
+        segment.EndOffset |> should equal 11
+
+    [<Test>]
+    member this.``Type annotation has correct segment``() =
+        let line, col, symbolUse, editor = getSymbol "let map (f : 'a$ -> 'b) = ()"
+        let segment = Symbols.getTextSegment editor symbolUse.Value col line
+        segment.Offset |> should equal 14
+        segment.EndOffset |> should equal 15
+
+    [<Test>]
+    member this.``Base method has correct segment``() =
+        let source =
+            """
+            type BaseType(int) = class end
+            type MyString() =
+                inherit BaseType(int)
+                let x = base.To$String() 
+            """
+        let line, col, symbolUse, editor = getSymbol source
+        let segment = Symbols.getTextSegment editor symbolUse.Value col line
+        segment.EndOffset - segment.Offset |> should equal 8
+
+    [<Test>]
     member this.``Tooltip arrows are right aligned``() =
         let input =
             """
             open System
-            let toBeParti§allyApplied (datNumba: int) (thaString: string) (be: bool) =
+            let toBeParti$allyApplied (datNumba: int) (thaString: string) (be: bool) =
                 ()
             """
 
@@ -68,7 +97,7 @@ type TestTooltipProvider() =
         let input =
             """
             open System
-            let allEqual coll = Seq.fora§ll2 (fun elem1 elem2 -> elem1 = elem2) coll
+            let allEqual coll = Seq.fora$ll2 (fun elem1 elem2 -> elem1 = elem2) coll
             """
 
         let signature = getTooltipSignature input
@@ -86,7 +115,7 @@ type TestTooltipProvider() =
     member this.``Base type constraint tooltip``() =
         let input =
             """
-            type A§<'T when 'T :> System.Exception> =
+            type A$<'T when 'T :> System.Exception> =
                 class end
             """
 
@@ -100,7 +129,7 @@ type TestTooltipProvider() =
     member this.``Interface type constraint tooltip``() =
         let input =
             """
-            type A§<'T when 'T :> System.IComparable> =
+            type A$<'T when 'T :> System.IComparable> =
                 class end
             """
 
@@ -114,7 +143,7 @@ type TestTooltipProvider() =
     member this.``Null type constraint tooltip``() =
         let input =
             """
-            type A§<'T when 'T : null> =
+            type A$<'T when 'T : null> =
                 class end
             """
 
@@ -128,7 +157,7 @@ type TestTooltipProvider() =
     member this.``Member constraint with static member tooltip``() =
         let input =
             """
-            type A§<'T when 'T : (static member staticMethod1 : unit -> 'T) > =
+            type A$<'T when 'T : (static member staticMethod1 : unit -> 'T) > =
                 class end
             """
 
@@ -140,7 +169,7 @@ type TestTooltipProvider() =
     member this.``Member constraint with instance member tooltip``() =
         let input =
             """
-            type A§<'T when 'T : (member Method1 : 'T -> int)> =
+            type A$<'T when 'T : (member Method1 : 'T -> int)> =
                 class end
             """
 
@@ -152,7 +181,7 @@ type TestTooltipProvider() =
     member this.``Member constraint with property tooltip``() =
         let input =
             """
-            type A§<'T when 'T : (member Property1 : int)> =
+            type A$<'T when 'T : (member Property1 : int)> =
                 class end
             """
 
@@ -165,7 +194,7 @@ type TestTooltipProvider() =
     member this.``Constructor constraint tooltip``() =
         let input =
             """
-            type A§<'T when 'T : (new : unit -> 'T)>() =
+            type A$<'T when 'T : (new : unit -> 'T)>() =
                 class end
             """
 
@@ -178,7 +207,7 @@ type TestTooltipProvider() =
     member this.``Reference type constraint tooltip``() =
         let input =
             """
-            type A§<'T when 'T : not struct> =
+            type A$<'T when 'T : not struct> =
                 class end
             """
 
@@ -191,7 +220,7 @@ type TestTooltipProvider() =
     member this.``Enum constraint tooltip``() =
         let input =
             """
-            type A§<'T when 'T : enum<uint32>> =
+            type A$<'T when 'T : enum<uint32>> =
                 class end
             """
 
@@ -204,7 +233,7 @@ type TestTooltipProvider() =
     member this.``Comparison constraint tooltip``() =
         let input =
             """
-            type A§<'T when 'T : comparison> =
+            type A$<'T when 'T : comparison> =
                 class end
             """
 
@@ -217,7 +246,7 @@ type TestTooltipProvider() =
     member this.``Equality constraint tooltip``() =
         let input =
             """
-            type A§<'T when 'T : equality> =
+            type A$<'T when 'T : equality> =
                 class end
             """
 
@@ -230,7 +259,7 @@ type TestTooltipProvider() =
     member this.``Delegate constraint tooltip``() =
         let input =
             """
-            type A§<'T when 'T : delegate<obj * System.EventArgs, unit>> =
+            type A$<'T when 'T : delegate<obj * System.EventArgs, unit>> =
                 class end
             """
 
@@ -243,7 +272,7 @@ type TestTooltipProvider() =
     member this.``Unmanaged constraint tooltip``() =
         let input =
             """
-            type A§<'T when 'T : unmanaged> =
+            type A$<'T when 'T : unmanaged> =
                 class end
             """
 
@@ -256,7 +285,7 @@ type TestTooltipProvider() =
     member this.``Member constraints with two type parameters tooltip``() =
         let input =
             """
-            let inline ad§d(value1 : ^T when ^T : (static member (+) : ^T * ^T -> ^T), value2: ^T) =
+            let inline ad$d(value1 : ^T when ^T : (static member (+) : ^T * ^T -> ^T), value2: ^T) =
                 value1 + value2
             """
 
@@ -272,7 +301,7 @@ type TestTooltipProvider() =
     member this.``Member operator constraint tooltip``() =
         let input =
             """
-            let inline heterog§enousAdd(value1 : ^T when (^T or ^U) : (static member (+) : ^T * ^U -> ^T), value2 : ^U) =
+            let inline heterog$enousAdd(value1 : ^T when (^T or ^U) : (static member (+) : ^T * ^U -> ^T), value2 : ^U) =
                 value1 + value2
             """
 
@@ -288,7 +317,7 @@ type TestTooltipProvider() =
     member this.``Multiple type constraints tooltip``() =
         let input =
             """
-            type A§<'T,'U when 'T : equality and 'U : equality> =
+            type A$<'T,'U when 'T : equality and 'U : equality> =
                 class end
             """
 
@@ -302,7 +331,7 @@ type TestTooltipProvider() =
     member this.``Struct type constraints tooltip``() =
         let input =
             """
-            type A§<'T when 'T : struct> =
+            type A$<'T when 'T : struct> =
                 class end
             """
 
@@ -314,7 +343,7 @@ type TestTooltipProvider() =
     member this.``Backticked val tooltip``() =
         let input =
             """
-            let ``backt§icked val`` =
+            let ``backt$icked val`` =
                 ()
             """
         let signature = getTooltipSignature input
@@ -326,7 +355,7 @@ type TestTooltipProvider() =
     member this.``Backticked function tooltip``() =
         let input =
             """
-            let ``backt§icked fun`` =
+            let ``backt$icked fun`` =
                 ()
             """
         let signature = getTooltipSignature input
@@ -338,7 +367,7 @@ type TestTooltipProvider() =
     member this.``Operator tooltip``() =
         let input =
             """
-            let add = ( +§ )
+            let add = ( +$ )
                 ()
             """
         let signature = getTooltipSignature input
@@ -349,26 +378,26 @@ type TestTooltipProvider() =
 
         signature |> should equal expected
         
-    [<TestCase("let (§|Even|Odd|) v = if v % 2 = 0 then Even(v) else Odd(v)");
-      TestCase("let (|§Even|Odd|) v = if v % 2 = 0 then Even(v) else Odd(v)");
-      TestCase("let (|Ev§en|Odd|) v = if v % 2 = 0 then Even(v) else Odd(v)");
-      TestCase("let (|Even§|Odd|) v = if v % 2 = 0 then Even(v) else Odd(v)");
-      TestCase("let (|Even|§Odd|) v = if v % 2 = 0 then Even(v) else Odd(v)");
-      TestCase("let (|Even|Od§d|) v = if v % 2 = 0 then Even(v) else Odd(v)");
-      TestCase("let (|Even|Odd§|) v = if v % 2 = 0 then Even(v) else Odd(v)");
-      TestCase("let (|Even|Odd|§) v = if v % 2 = 0 then Even(v) else Odd(v)")>]
+    [<TestCase("let ($|Even|Odd|) v = if v % 2 = 0 then Even(v) else Odd(v)");
+      TestCase("let (|$Even|Odd|) v = if v % 2 = 0 then Even(v) else Odd(v)");
+      TestCase("let (|Ev$en|Odd|) v = if v % 2 = 0 then Even(v) else Odd(v)");
+      TestCase("let (|Even$|Odd|) v = if v % 2 = 0 then Even(v) else Odd(v)");
+      TestCase("let (|Even|$Odd|) v = if v % 2 = 0 then Even(v) else Odd(v)");
+      TestCase("let (|Even|Od$d|) v = if v % 2 = 0 then Even(v) else Odd(v)");
+      TestCase("let (|Even|Odd$|) v = if v % 2 = 0 then Even(v) else Odd(v)");
+      TestCase("let (|Even|Odd|$) v = if v % 2 = 0 then Even(v) else Odd(v)")>]
     member this.``Complete Active Pattern tooltip``(input) =
         let signature = getTooltipSignature input
         let expected = "val ( |Even|Odd| ) :\n   v: int \n   -> Choice<int,int>"
         signature |> should equal expected
         
-    [<TestCase("let (§|Even|_|) v = if v % 2 = 0 then Some v else None");
-      TestCase("let (|§Even|_|) v = if v % 2 = 0 then Some v else None");
-      TestCase("let (|Ev§en|_|) v = if v % 2 = 0 then Some v else None");
-      TestCase("let (|Even§|_|) v = if v % 2 = 0 then Some v else None");
-      TestCase("let (|Even|§_|) v = if v % 2 = 0 then Some v else None");
-      TestCase("let (|Even|_§|) v = if v % 2 = 0 then Some v else None");
-      TestCase("let (|Even|_|§) v = if v % 2 = 0 then Some v else None")>]
+    [<TestCase("let ($|Even|_|) v = if v % 2 = 0 then Some v else None");
+      TestCase("let (|$Even|_|) v = if v % 2 = 0 then Some v else None");
+      TestCase("let (|Ev$en|_|) v = if v % 2 = 0 then Some v else None");
+      TestCase("let (|Even$|_|) v = if v % 2 = 0 then Some v else None");
+      TestCase("let (|Even|$_|) v = if v % 2 = 0 then Some v else None");
+      TestCase("let (|Even|_$|) v = if v % 2 = 0 then Some v else None");
+      TestCase("let (|Even|_|$) v = if v % 2 = 0 then Some v else None")>]
     member this.``Partial Active Pattern tooltip``(input) =
         let signature = getTooltipSignature input
         let expected = "val ( |Even|_| ) :\n   v: int \n   -> int option"
@@ -377,7 +406,7 @@ type TestTooltipProvider() =
     [<Test>]
     member this.``Displays member type and assembly``() =
         let sequence = ["string"].Head
-        let input = """let se§quence = ["string"].Head"""
+        let input = """let se$quence = ["string"].Head"""
         let footer = getTooltipFooter input
         let expected = "From type:\tString\nAssembly:\tFSharp.Core"
 
@@ -386,10 +415,22 @@ type TestTooltipProvider() =
     [<Test>]
     member this.``Xml summary should be escaped``() =
         let input = """///<summary>This is the summary</summary>
-type myT§ype = class end"""
+type myT$ype = class end"""
         let summary = getTooltipSummary input
         let expected = "This is the summary"
 
         summary |> shouldEqual expected
 
- 
+    [<Test>]
+    member this.``Function type tooltip``() =
+        let input =
+            """
+            type Spell =
+               | Frotz
+               | Grotz
+
+            type Sp$ellF = Spell -> Async<unit>
+            """
+        let signature = getTooltipSignature input
+        let expected = "type SpellF = Spell -> Async<unit>"
+        signature |> should equal expected

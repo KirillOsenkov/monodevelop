@@ -31,6 +31,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Xml;
 
+using MonoDevelop.Projects;
 using MonoDevelop.Projects.MSBuild;
 using NuGet.ProjectManagement;
 
@@ -87,6 +88,47 @@ namespace MonoDevelop.PackageManagement
 		public static bool ImportExists (this MSBuildProject project, string importedProjectFile)
 		{
 			return project.GetImport (importedProjectFile) != null;
+		}
+
+		public static IEnumerable<ProjectPackageReference> GetEvaluatedPackageReferences (this MSBuildProject project)
+		{
+			return project.GetEvaluatedPackageReferenceItems ()
+				.Select (ProjectPackageReference.Create);
+		}
+
+		static IEnumerable<IMSBuildItemEvaluated> GetEvaluatedPackageReferenceItems (this MSBuildProject project)
+		{
+			if (project.EvaluatedItems != null) {
+				return project.EvaluatedItems
+					.Where (item => item.Name == "PackageReference");
+			}
+
+			return Enumerable.Empty<IMSBuildItemEvaluated> ();
+		}
+
+		public static bool HasEvaluatedPackageReferences (this MSBuildProject project)
+		{
+			return project.GetEvaluatedPackageReferenceItems ().Any ();
+		}
+
+		/// <summary>
+		/// Returns package references (e.g. NETStandard.Library) that are not directly defined
+		/// in the project file but included due to the sdk and target framework being used.
+		/// </summary>
+		public static IEnumerable<ProjectPackageReference> GetImportedPackageReferences (this MSBuildProject project, DotNetProject dotNetProject)
+		{
+			return project.GetEvaluatedPackageReferenceItems ()
+				.Where (item => item.IsImported)
+				.Select (item => CreateImportedPackageReference (item, dotNetProject));
+		}
+
+		public static Action<ProjectPackageReference, DotNetProject> ModifyImportedPackageReference;
+
+		static ProjectPackageReference CreateImportedPackageReference (IMSBuildItemEvaluated item, DotNetProject project)
+		{
+			var packageReference = ProjectPackageReference.Create (item);
+			ModifyImportedPackageReference?.Invoke (packageReference, project);
+			return packageReference;
 		}
 	}
 }

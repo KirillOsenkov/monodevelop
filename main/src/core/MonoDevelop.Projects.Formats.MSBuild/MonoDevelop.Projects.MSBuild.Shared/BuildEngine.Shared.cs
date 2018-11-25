@@ -1,4 +1,4 @@
-// 
+﻿// 
 // ProjectBuilder.cs
 //  
 // Author:
@@ -43,7 +43,7 @@ namespace MonoDevelop.Projects.MSBuild
 {
 	partial class BuildEngine
 	{
-		static readonly AutoResetEvent workDoneEvent = new AutoResetEvent (false);
+		static AutoResetEvent workDoneEvent;
 		static ThreadStart workDelegate;
 		static readonly object workLock = new object ();
 		static Thread workThread;
@@ -177,15 +177,6 @@ namespace MonoDevelop.Projects.MSBuild
 		}
 
 		[MessageHandler]
-		public BinaryMessage DisposeProject (DisposeProjectRequest msg)
-		{
-			var pb = GetProject (msg.ProjectId);
-			if (pb != null)
-				pb.Dispose ();
-			return msg.CreateResponse ();
-		}
-
-		[MessageHandler]
 		public BinaryMessage RefreshProject (RefreshProjectRequest msg)
 		{
 			var pb = GetProject (msg.ProjectId);
@@ -212,6 +203,21 @@ namespace MonoDevelop.Projects.MSBuild
 				var res = pb.Run (msg.Configurations, logger, msg.Verbosity, msg.RunTargets, msg.EvaluateItems, msg.EvaluateProperties, msg.GlobalProperties, msg.TaskId);
 				return new RunProjectResponse { Result = res };
 			}
+			return msg.CreateResponse ();
+		}
+
+		[MessageHandler]
+		public BinaryMessage BeginBuild (BeginBuildRequest msg)
+		{
+			var logger = msg.LogWriterId != -1 ? (IEngineLogWriter)new LogWriter (msg.LogWriterId, msg.EnabledLogEvents) : (IEngineLogWriter)new NullLogWriter ();
+			BeginBuildOperation (logger, msg.Verbosity, msg.Configurations);
+			return msg.CreateResponse ();
+		}
+
+		[MessageHandler]
+		public BinaryMessage EndBuild (EndBuildRequest msg)
+		{
+			EndBuildOperation ();
 			return msg.CreateResponse ();
 		}
 
@@ -266,13 +272,18 @@ namespace MonoDevelop.Projects.MSBuild
 			lock (workLock) {
 				if (IsTaskCancelled (taskId))
 					return;
+
+				AutoResetEvent doneEvent;
+
 				lock (threadLock) {
 					// Last chance to check for canceled task before the thread is started
 					if (IsTaskCancelled (taskId))
 						return;
-					
+
+					doneEvent = workDoneEvent = new AutoResetEvent (false);
 					workDelegate = ts;
 					workError = null;
+
 					if (workThread == null) {
 						workThread = new Thread (STARunner);
 						workThread.SetApartmentState (ApartmentState.STA);
@@ -290,7 +301,7 @@ namespace MonoDevelop.Projects.MSBuild
 					return;
 				}
 
-				workDoneEvent.WaitOne ();
+				doneEvent.WaitOne ();
 
 				ResetCurrentTask ();
 			}
@@ -307,19 +318,28 @@ namespace MonoDevelop.Projects.MSBuild
 		
 		static void STARunner ()
 		{
-			lock (threadLock) {
-				do {
-					try {
-						workDelegate ();
+			try {
+				lock (threadLock) {
+					do {
+						var doneEvent = workDoneEvent;
+						try {
+							workDelegate ();
+						} catch (ThreadAbortException) {
+							// Gracefully stop the thread
+							Thread.ResetAbort ();
+							return;
+						} catch (Exception ex) {
+							workError = ex;
+						}
+						doneEvent.Set ();
 					}
-					catch (Exception ex) {
-						workError = ex;
-					}
-					workDoneEvent.Set ();
+					while (Monitor.Wait (threadLock, 60000));
+
+					workThread = null;
 				}
-				while (Monitor.Wait (threadLock, 60000));
-				
-				workThread = null;
+			} catch (ThreadAbortException) {
+				// Gracefully stop the thread
+				Thread.ResetAbort ();
 			}
 		}
 	}

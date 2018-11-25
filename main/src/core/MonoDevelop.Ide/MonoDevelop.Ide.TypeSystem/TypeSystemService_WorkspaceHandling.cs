@@ -35,47 +35,10 @@ using System.IO;
 using System.Linq;
 using System.Collections.Immutable;
 using System.Collections.Concurrent;
+using System.ComponentModel;
 
 namespace MonoDevelop.Ide.TypeSystem
 {
-
-//	static class MonoDevelopWorkspaceFeatures
-//	{
-//		static FeaturePack pack;
-//
-//		public static FeaturePack Features {
-//			get {
-//				if (pack == null)
-//					Interlocked.CompareExchange (ref pack, ComputePack (), null);
-//				return pack;
-//			}
-//		}
-//
-//		static FeaturePack ComputePack ()
-//		{
-//			var assemblies = new List<Assembly> ();
-//			var workspaceCoreAssembly = typeof(Workspace).Assembly;
-//			assemblies.Add (workspaceCoreAssembly);
-//
-//			LoadAssembly (assemblies, "Microsoft.CodeAnalysis.CSharp.Workspaces");
-//			//LoadAssembly (assemblies, "Microsoft.CodeAnalysis.VisualBasic.Workspaces");
-//
-//			var catalogs = assemblies.Select (a => new System.ComponentModel.Composition.Hosting.AssemblyCatalog (a));
-//
-//			return new MefExportPack (catalogs);
-//		}
-//
-//		static void LoadAssembly (List<Assembly> assemblies, string assemblyName)
-//		{
-//			try {
-//				var loadedAssembly = Assembly.Load (assemblyName);
-//				assemblies.Add (loadedAssembly);
-//			} catch (Exception e) {
-//				LoggingService.LogWarning ("Couldn't load assembly:" + assemblyName, e);
-//			}
-//		}
-//	}
-
 	public static partial class TypeSystemService
 	{
 		static readonly MonoDevelopWorkspace emptyWorkspace;
@@ -94,7 +57,7 @@ namespace MonoDevelop.Ide.TypeSystem
 		public static MonoDevelopWorkspace GetWorkspace (MonoDevelop.Projects.Solution solution)
 		{
 			if (solution == null)
-				throw new ArgumentNullException ("solution");
+				throw new ArgumentNullException (nameof(solution));
 			foreach (var ws in workspaces) {
 				if (ws.MonoDevelopSolution == solution)
 					return ws;
@@ -150,22 +113,22 @@ namespace MonoDevelop.Ide.TypeSystem
 			}
 		}
 
-		internal static async Task<List<MonoDevelopWorkspace>> Load (WorkspaceItem item, ProgressMonitor progressMonitor, CancellationToken cancellationToken = default(CancellationToken))
+		internal static async Task<List<MonoDevelopWorkspace>> Load (WorkspaceItem item, ProgressMonitor progressMonitor, CancellationToken cancellationToken = default (CancellationToken), bool showStatusIcon = true)
 		{
 			using (Counters.ParserService.WorkspaceItemLoaded.BeginTiming ()) {
 				var wsList = new List<MonoDevelopWorkspace> ();
 				//If we want BeginTiming to work correctly we need to `await`
-				return await InternalLoad (wsList, item, progressMonitor, cancellationToken).ContinueWith (t => { t.Wait (); return wsList; });
+				return await InternalLoad (wsList, item, progressMonitor, cancellationToken, showStatusIcon).ContinueWith (t => { t.Wait (); return wsList; });
 			}
 		}
 
-		static Task InternalLoad (List<MonoDevelopWorkspace> list, MonoDevelop.Projects.WorkspaceItem item, ProgressMonitor progressMonitor, CancellationToken cancellationToken = default(CancellationToken))
+		static Task InternalLoad (List<MonoDevelopWorkspace> list, MonoDevelop.Projects.WorkspaceItem item, ProgressMonitor progressMonitor, CancellationToken cancellationToken = default(CancellationToken), bool showStatusIcon = true)
 		{
 			return Task.Run (async () => {
 				var ws = item as MonoDevelop.Projects.Workspace;
 				if (ws != null) {
 					foreach (var it in ws.Items) {
-						await InternalLoad (list, it, progressMonitor, cancellationToken);
+						await InternalLoad (list, it, progressMonitor, cancellationToken).ConfigureAwait (false);
 					}
 					ws.ItemAdded += OnWorkspaceItemAdded;
 					ws.ItemRemoved += OnWorkspaceItemRemoved;
@@ -176,14 +139,16 @@ namespace MonoDevelop.Ide.TypeSystem
 						lock (workspaceLock)
 							workspaces = workspaces.Add (workspace);
 						list.Add (workspace);
-						workspace.ShowStatusIcon ();
-						await workspace.TryLoadSolution (cancellationToken);
+						if (showStatusIcon)
+							workspace.ShowStatusIcon ();
+						await workspace.TryLoadSolution (cancellationToken).ConfigureAwait (false);
 						solution.SolutionItemAdded += OnSolutionItemAdded;
 						solution.SolutionItemRemoved += OnSolutionItemRemoved;
 						TaskCompletionSource<MonoDevelopWorkspace> request;
 						if (workspaceRequests.TryGetValue (solution, out request))
 							request.TrySetResult (workspace);
-						workspace.HideStatusIcon ();
+						if (showStatusIcon)
+							workspace.HideStatusIcon ();
 					}
 				}
 			});
@@ -218,9 +183,9 @@ namespace MonoDevelop.Ide.TypeSystem
 		public static DocumentId GetDocumentId (MonoDevelop.Projects.Project project, string fileName)
 		{
 			if (project == null)
-				throw new ArgumentNullException ("project");
+				throw new ArgumentNullException (nameof(project));
 			if (fileName == null)
-				throw new ArgumentNullException ("fileName");
+				throw new ArgumentNullException (nameof(fileName));
 			fileName = FileService.GetFullPath (fileName);
 			foreach (var w in workspaces) {
 				var projectId = w.GetProjectId (project);
@@ -233,9 +198,9 @@ namespace MonoDevelop.Ide.TypeSystem
 		public static DocumentId GetDocumentId (Microsoft.CodeAnalysis.Workspace workspace, MonoDevelop.Projects.Project project, string fileName)
 		{
 			if (project == null)
-				throw new ArgumentNullException ("project");
+				throw new ArgumentNullException (nameof(project));
 			if (fileName == null)
-				throw new ArgumentNullException ("fileName");
+				throw new ArgumentNullException (nameof(fileName));
 			fileName = FileService.GetFullPath (fileName);
 			var projectId = ((MonoDevelopWorkspace)workspace).GetProjectId (project);
 			if (projectId != null) {
@@ -250,9 +215,9 @@ namespace MonoDevelop.Ide.TypeSystem
 		public static DocumentId GetDocumentId (ProjectId projectId, string fileName)
 		{
 			if (projectId == null)
-				throw new ArgumentNullException ("projectId");
+				throw new ArgumentNullException (nameof(projectId));
 			if (fileName == null)
-				throw new ArgumentNullException ("fileName");
+				throw new ArgumentNullException (nameof(fileName));
 			foreach (var w in workspaces) {
 				if (w.Contains (projectId))
 					return w.GetDocumentId (projectId, fileName);
@@ -263,7 +228,7 @@ namespace MonoDevelop.Ide.TypeSystem
 		public static IEnumerable<DocumentId> GetDocuments (string fileName)
 		{
 			if (fileName == null)
-				throw new ArgumentNullException ("fileName");
+				throw new ArgumentNullException (nameof(fileName));
 			fileName = FileService.GetFullPath (fileName);
 			foreach (var w in workspaces) {
 				foreach (var projectId in w.CurrentSolution.ProjectIds) {
@@ -277,7 +242,7 @@ namespace MonoDevelop.Ide.TypeSystem
 		public static Microsoft.CodeAnalysis.Project GetCodeAnalysisProject (MonoDevelop.Projects.Project project)
 		{
 			if (project == null)
-				throw new ArgumentNullException ("project");
+				throw new ArgumentNullException (nameof(project));
 			foreach (var w in workspaces) {
 				var projectId = w.GetProjectId (project); 
 				if (projectId != null)
@@ -297,7 +262,7 @@ namespace MonoDevelop.Ide.TypeSystem
 		public static Task<Compilation> GetCompilationAsync (MonoDevelop.Projects.Project project, CancellationToken cancellationToken = default(CancellationToken))
 		{
 			if (project == null)
-				throw new ArgumentNullException ("project");
+				throw new ArgumentNullException (nameof(project));
 			foreach (var w in workspaces) {
 				var projectId = w.GetProjectId (project); 
 				if (projectId == null)
@@ -340,18 +305,18 @@ namespace MonoDevelop.Ide.TypeSystem
 		}
 
 		#region Tracked project handling
-		static readonly List<string> outputTrackedProjects = new List<string> ();
+		static readonly List<TypeSystemOutputTrackingNode> outputTrackedProjects = new List<TypeSystemOutputTrackingNode> ();
 
 		static void IntitializeTrackedProjectHandling ()
 		{
 			AddinManager.AddExtensionNodeHandler ("/MonoDevelop/TypeSystem/OutputTracking", delegate (object sender, ExtensionNodeEventArgs args) {
-				var projectType = ((TypeSystemOutputTrackingNode)args.ExtensionNode).LanguageName;
+				var node = (TypeSystemOutputTrackingNode)args.ExtensionNode;
 				switch (args.Change) {
 				case ExtensionChange.Add:
-					outputTrackedProjects.Add (projectType);
+					AddOutputTrackingNode (node);
 					break;
 				case ExtensionChange.Remove:
-					outputTrackedProjects.Remove (projectType);
+					outputTrackedProjects.Remove (node);
 					break;
 				}
 			});
@@ -359,8 +324,15 @@ namespace MonoDevelop.Ide.TypeSystem
 				IdeApp.ProjectOperations.EndBuild += HandleEndBuild;
 			if (IdeApp.Workspace != null)
 				IdeApp.Workspace.ActiveConfigurationChanged += HandleActiveConfigurationChanged;
+		}
 
-
+		/// <summary>
+		/// Adds an output tracking node for unit testing purposes.
+		/// </summary>
+		[EditorBrowsable(EditorBrowsableState.Never)]
+		internal static void AddOutputTrackingNode (TypeSystemOutputTrackingNode node)
+		{
+			outputTrackedProjects.Add (node);
 		}
 
 		static void HandleEndBuild (object sender, BuildEventArgs args)
@@ -385,14 +357,15 @@ namespace MonoDevelop.Ide.TypeSystem
 		internal static bool IsOutputTrackedProject (DotNetProject project)
 		{
 			if (project == null)
-				throw new ArgumentNullException ("project");
-			return outputTrackedProjects.Contains (project.LanguageName, StringComparer.OrdinalIgnoreCase);
+				throw new ArgumentNullException (nameof(project));
+			return outputTrackedProjects.Any (otp => string.Equals (otp.LanguageName, project.LanguageName, StringComparison.OrdinalIgnoreCase)) || 
+				project.GetTypeTags().Any (tag => outputTrackedProjects.Any (otp => string.Equals (otp.ProjectType, tag, StringComparison.OrdinalIgnoreCase)));
 		}
 
 		static void CheckProjectOutput (DotNetProject project, bool autoUpdate)
 		{
 			if (project == null)
-				throw new ArgumentNullException ("project");
+				throw new ArgumentNullException (nameof(project));
 			if (IsOutputTrackedProject (project)) {
 				var fileName = project.GetOutputFileName (IdeApp.Workspace.ActiveConfiguration);
 				if (!File.Exists (fileName))
@@ -407,115 +380,6 @@ namespace MonoDevelop.Ide.TypeSystem
 			}
 		}
 		#endregion
-
-// TODO: Port framework lookup to NR6
-//		#region FrameworkLookup
-//		class FrameworkTask
-//		{
-//			public int RetryCount { get; set; }
-//
-//			public Task<FrameworkLookup> Task { get; set; }
-//		}
-//
-//		readonly static Dictionary<string, FrameworkTask> frameworkLookup = new Dictionary<string, FrameworkTask> ();
-//
-//		static void StartFrameworkLookup (DotNetProject netProject)
-//		{
-//			if (netProject == null)
-//				throw new ArgumentNullException ("netProject");
-//			lock (frameworkLookup) {
-//				FrameworkTask result;
-//				if (netProject.TargetFramework == null)
-//					return;
-//				var frameworkName = netProject.TargetFramework.Name;
-//				if (!frameworkLookup.TryGetValue (frameworkName, out result))
-//					frameworkLookup [frameworkName] = result = new FrameworkTask ();
-//				if (result.Task != null)
-//					return;
-//				result.Task = Task.Factory.StartNew (delegate {
-//					return GetFrameworkLookup (netProject);
-//				});
-//			}
-//		}
-//
-//		public static bool TryGetFrameworkLookup (DotNetProject project, out FrameworkLookup lookup)
-//		{
-//			lock (frameworkLookup) {
-//				FrameworkTask result;
-//				if (frameworkLookup.TryGetValue (project.TargetFramework.Name, out result)) {
-//					if (!result.Task.IsCompleted) {
-//						lookup = null;
-//						return false;
-//					}
-//					lookup = result.Task.Result;
-//					return true;
-//				}
-//			}
-//			lookup = null;
-//			return false;
-//		}
-//
-//		public static bool RecreateFrameworkLookup (DotNetProject netProject)
-//		{
-//			lock (frameworkLookup) {
-//				FrameworkTask result;
-//				var frameworkName = netProject.TargetFramework.Name;
-//				if (!frameworkLookup.TryGetValue (frameworkName, out result))
-//					return false;
-//				if (result.RetryCount > 5) {
-//					LoggingService.LogError ("Can't create framework lookup for:" + frameworkName);
-//					return false;
-//				}
-//				result.RetryCount++;
-//				LoggingService.LogInfo ("Trying to recreate framework lookup for {0}, try {1}.", frameworkName, result.RetryCount);
-//				result.Task = null;
-//				StartFrameworkLookup (netProject);
-//				return true;
-//			}
-//		}
-//
-//		static FrameworkLookup GetFrameworkLookup (DotNetProject netProject)
-//		{
-//			FrameworkLookup result;
-//			string fileName;
-//			var cache = GetCacheDirectory (netProject.TargetFramework);
-//			fileName = Path.Combine (cache, "FrameworkLookup_" + FrameworkLookup.CurrentVersion + ".dat");
-//			try {
-//				if (File.Exists (fileName)) {
-//					result = FrameworkLookup.Load (fileName);
-//					if (result != null) {
-//						return result;
-//					}
-//				}
-//			} catch (Exception e) {
-//				LoggingService.LogWarning ("Can't read framework cache - recreating...", e);
-//			}
-//
-//			try {
-//				using (var creator = FrameworkLookup.Create (fileName)) {
-//					foreach (var assembly in GetFrameworkAssemblies (netProject)) {
-//						var ctx = LoadAssemblyContext (assembly.Location);
-//						foreach (var type in ctx.Ctx.GetAllTypeDefinitions ()) {
-//							if (!type.IsPublic)
-//								continue;
-//							creator.AddLookup (assembly.Package.Name, assembly.FullName, type);
-//						}
-//					}
-//				}
-//			} catch (Exception e) {
-//				LoggingService.LogError ("Error while storing framework lookup", e);
-//				return FrameworkLookup.Empty;
-//			}
-//
-//			try {
-//				result = FrameworkLookup.Load (fileName);
-//				return result;
-//			} catch (Exception e) {
-//				LoggingService.LogError ("Error loading framework lookup", e);
-//				return FrameworkLookup.Empty;
-//			}
-//		}
-//		#endregion
 	}
 
 }

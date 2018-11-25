@@ -1,16 +1,17 @@
 ﻿namespace MonoDevelop.FSharp
 open System
+open System.Collections.Generic
 open System.IO
 open System.Diagnostics
 open Microsoft.FSharp.Compiler
 open Microsoft.FSharp.Compiler.SourceCodeServices
-open ExtCore
 open ExtCore.Control
 open ExtCore.Control.Collections
 open MonoDevelop.Core
 open MonoDevelop.Ide
-open MonoDevelop.Ide.Editor
+open MonoDevelop.Ide.TypeSystem
 open MonoDevelop.Projects
+open MonoDevelop.FSharp.Shared
 
 module Symbol =
     /// We always know the text of the identifier that resolved to symbol.
@@ -51,8 +52,9 @@ type ParseAndCheckResults (infoOpt : FSharpCheckFileResults option, parseResults
             LoggingService.logDebug "GetDeclarations: '%A', '%s'" longName residue
             // Get items & generate output
             try
+                let partialName = QuickParse.GetPartialLongNameEx(lineStr, col-1)
                 let results =
-                    Async.RunSynchronously (checkResults.GetDeclarationListInfo( parseResults, line, col, lineStr, longName, residue, fun (_,_) -> false), timeout = ServiceSettings.blockingTimeout )
+                    Async.RunSynchronously(checkResults.GetDeclarationListInfo(parseResults, line, lineStr, partialName, fun () -> []), timeout = ServiceSettings.blockingTimeout )
                 Some (results, residue)
             with :? TimeoutException -> None
         | None, _ -> None
@@ -63,12 +65,13 @@ type ParseAndCheckResults (infoOpt : FSharpCheckFileResults option, parseResults
         async {
             match infoOpt, parseResults with
             | Some checkResults, parseResults ->
-                  let longName,residue = Parsing.findLongIdentsAndResidue(col, lineStr)
-                  LoggingService.logDebug "GetDeclarationSymbols: '%A', '%s'" longName residue
                   // Get items & generate output
+                  let partialName = QuickParse.GetPartialLongNameEx(lineStr, col-1)
+
                   try
-                      let! results = checkResults.GetDeclarationListSymbols(parseResults, line, col, lineStr, longName, residue, fun (_,_) -> false)
-                      return Some (results, residue)
+                      let! results = checkResults.GetDeclarationListSymbols(parseResults, line, lineStr, partialName)
+
+                      return Some (results, partialName.PartialIdent)
                   with :? TimeoutException -> return None
             | None, _ -> return None
         }
@@ -82,11 +85,8 @@ type ParseAndCheckResults (infoOpt : FSharpCheckFileResults option, parseResults
                 match Parsing.findIdents col lineStr SymbolLookupKind.ByLongIdent with
                 | None -> return None
                 | Some(col,identIsland) ->
-                    let! res = checkResults.GetToolTipTextAlternate(line, col, lineStr, identIsland, FSharpTokenTag.Identifier)
-                    let! sym = checkResults.GetSymbolUseAtLocation(line, col, lineStr, identIsland)
-                    LoggingService.logDebug "Result: Got something, returning"
-                    return sym |> Option.bind (fun sym -> let start, finish = Symbol.trimSymbolRegion sym (Seq.last identIsland)
-                                                          Some (res, (start.Column, finish.Column)))
+                    let! res = checkResults.GetToolTipText(line, col, lineStr, identIsland, FSharpTokenTag.Identifier)
+                    return Some (res, line)
             | None -> return None }
 
     member x.GetDeclarationLocation(line, col, lineStr) =
@@ -94,9 +94,9 @@ type ParseAndCheckResults (infoOpt : FSharpCheckFileResults option, parseResults
             match infoOpt with
             | Some checkResults ->
                 match Parsing.findIdents col lineStr SymbolLookupKind.ByLongIdent with
-                | None -> return FSharpFindDeclResult.DeclNotFound FSharpFindDeclFailureReason.Unknown
-                | Some(col,identIsland) -> return! checkResults.GetDeclarationLocationAlternate(line, col, lineStr, identIsland, false)
-            | None -> return FSharpFindDeclResult.DeclNotFound FSharpFindDeclFailureReason.Unknown }
+                | None -> return FSharpFindDeclResult.DeclNotFound (FSharpFindDeclFailureReason.Unknown "No idents found")
+                | Some(col,identIsland) -> return! checkResults.GetDeclarationLocation(line, col, lineStr, identIsland, false)
+            | None -> return FSharpFindDeclResult.DeclNotFound (FSharpFindDeclFailureReason.Unknown "No check results")}
 
     member x.GetSymbolAtLocation(line, col, lineStr) =
         async {
@@ -177,9 +177,9 @@ type ParseAndCheckResults (infoOpt : FSharpCheckFileResults option, parseResults
 
     member x.CheckResults = infoOpt
 
-    member x.GetExtraColorizations() =
+    member x.GetExtraColorizations(range) =
         match infoOpt with
-        | Some checkResults -> Some(checkResults.GetExtraColorizationsAlternate())
+        | Some checkResults -> Some(checkResults.GetSemanticClassification(range))
         | None -> None
 
     member x.GetStringFormatterColours() =
@@ -197,7 +197,7 @@ type AllowStaleResults =
 //type Debug = System.Console
 
 /// Provides functionality for working with the F# interactive checker running in background
-type LanguageService(dirtyNotify) as x =
+type LanguageService(dirtyNotify, _extraProjectInfo) as x =
 
     /// Load times used to reset type checking properly on script/project load/unload. It just has to be unique for each project load/reload.
     /// Not yet sure if this works for scripts.
@@ -242,6 +242,16 @@ type LanguageService(dirtyNotify) as x =
                     | None -> () }
         Async.Start computation
 
+    let loadingProjects = HashSet<string>()
+
+    let showStatusIcon projectFileName =
+        if loadingProjects.Add projectFileName then
+            TypeSystemService.ShowTypeInformationGatheringIcon()
+
+    let hideStatusIcon projectFileName =
+        if loadingProjects.Remove projectFileName then
+            TypeSystemService.HideTypeInformationGatheringIcon()
+
     // Create an instance of interactive checker. The callback is called by the F# compiler service
     // when its view of the prior-typechecking-state of the start of a file has changed, for example
     // when the background typechecker has "caught up" after some other file has been changed,
@@ -251,10 +261,12 @@ type LanguageService(dirtyNotify) as x =
         checker.PauseBeforeBackgroundWork <- ServiceSettings.idleBackgroundCheckTime
         checker.BeforeBackgroundFileCheck.Add dirtyNotify
 #if DEBUG
-        checker.FileParsed.Add (fun filename -> LoggingService.logDebug "LanguageService: File parsed: %s" filename)
-        checker.FileChecked.Add (fun filename -> LoggingService.logDebug "LanguageService: File type checked: %s" filename)
+        checker.FileParsed.Add (fun (filename, _) -> LoggingService.logDebug "LanguageService: File parsed: %s" filename)
+        checker.FileChecked.Add (fun (filename, _) -> LoggingService.logDebug "LanguageService: File type checked: %s" filename)
 #endif
-        checker.ProjectChecked.Add projectChecked
+        checker.ProjectChecked.Add (fun (filename, _) -> 
+            projectChecked filename
+            hideStatusIcon filename)
         checker
 
     /// When creating new script file on Mac, the filename we get sometimes
@@ -276,15 +288,13 @@ type LanguageService(dirtyNotify) as x =
         //cache 50 project infos, then start evicting the least recently used entries
         ref (ExtCore.Caching.LruCache.create 50u)
 
+    let optionsForDependentProject p =
+        async {
+            let! assemblies = x.GetReferencedAssembliesAsync p
+            return x.GetProjectCheckerOptions(p, [], assemblies)
+        }
 
-
-    member x.RemoveFromProjectInfoCache(projFilename:string, ?properties) =
-        let properties = defaultArg properties ["Configuration", "Debug"]
-        let key = (projFilename, properties)
-        LoggingService.logDebug "LanguageService: Removing %s from projectInfoCache" projFilename
-        match (!projectInfoCache).TryExtract(key) with
-        | Some _extractee, cache -> projectInfoCache := cache
-        | None, _unchangedCache -> ()
+    member x.Checker = checker
 
     member x.ClearProjectInfoCache() =
         LoggingService.logDebug "LanguageService: Clearing ProjectInfoCache"
@@ -300,6 +310,9 @@ type LanguageService(dirtyNotify) as x =
             else x.GetProjectCheckerOptions(projFilename)
         opts
 
+    member x.GetParsingOptionsFromProjectOptions(projectOptions) =
+        checker.GetParsingOptionsFromProjectOptions projectOptions
+
     /// Constructs options for the interactive checker for the given script file in the project under the given configuration.
     member x.GetScriptCheckerOptions(fileName, projFilename, source) =
         let opts =
@@ -307,7 +320,7 @@ type LanguageService(dirtyNotify) as x =
             try
                 let fileName = fixFileName(fileName)
                 LoggingService.LogDebug ("LanguageService: GetScriptCheckerOptions: Creating for stand-alone file or script: {0}", fileName)
-                let opts =
+                let opts, _errors =
                   Async.RunSynchronously (checker.GetProjectOptionsFromScript(fileName, source, fakeDateTimeRepresentingTimeLoaded projFilename),
                                           timeout = ServiceSettings.maximumTimeout)
 
@@ -332,7 +345,24 @@ type LanguageService(dirtyNotify) as x =
         //                      opts.ProjectFileName opts.ProjectFileNames opts.ProjectOptions opts.IsIncompleteTypeCheckEnvironment opts.UseScriptResolutionRules)
         Some opts
 
-    member x.GetProjectOptionsFromProjectFile(project:DotNetProject) =
+    member x.GetProjectFromFileName projectFile =
+        IdeApp.Workspace.GetAllProjects()
+        |> Seq.tryFind (fun p -> p.FileName.FullPath.ToString() = projectFile)
+        |> Option.map(fun p -> p :?> DotNetProject)
+
+    member x.GetReferencedAssembliesSynchronously (project:DotNetProject) =
+        project.GetReferencedAssemblies(CompilerArguments.getConfig()).Result
+
+    member x.GetReferencedAssembliesAsync projectFile =
+        async {
+            let project = x.GetProjectFromFileName projectFile
+            match project with
+            | Some proj -> return! proj.GetReferencedAssemblies(CompilerArguments.getConfig()) |> Async.AwaitTask
+            | None -> return Seq.empty
+        }
+
+    member x.GetProjectOptionsFromProjectFile(project:DotNetProject, ?referencedAssemblies) =
+        let referencedAssemblies = defaultArg referencedAssemblies (x.GetReferencedAssembliesSynchronously project)
         let config =
             match IdeApp.Workspace with
             | null -> ConfigurationSelector.Default
@@ -346,23 +376,31 @@ type LanguageService(dirtyNotify) as x =
             |> Seq.filter (fun p -> p <> project && p.SupportedLanguages |> Array.contains "F#")
 
         let rec getOptions referencedProject =
-            let projectOptions = CompilerArguments.getArgumentsFromProject referencedProject
-            let referencedProjectOptions =
-                referencedProject
-                |> getReferencedProjects
-                |> Seq.fold (fun (acc) reference ->
-                                 match getOptions reference with
-                                 | Some outFile, opts  -> (outFile, opts) :: acc
-                                 | None,_ -> acc) ([])
-                                
-            (Some (referencedProject.GetOutputFileName(config).ToString()), { projectOptions with ReferencedProjects = referencedProjectOptions |> Array.ofList } )
-    
+            let projectOptions = CompilerArguments.getArgumentsFromProject referencedProject referencedAssemblies
+            match projectOptions with
+            | Some projOptions ->
+                let referencedProjectOptions =
+                    referencedProject
+                    |> getReferencedProjects
+                    |> Seq.fold (fun acc reference ->
+                                     match getOptions reference with
+                                     | Some outFile, Some opts  -> (outFile, opts) :: acc
+                                     | _ -> acc) ([])
+                                    
+                (Some (referencedProject.GetOutputFileName(config).ToString()), Some ({ projOptions with ReferencedProjects = referencedProjectOptions |> Array.ofList } ))
+            | None -> None, None
         let _file, projectOptions = getOptions project
         projectOptions
                 
+    member x.TryGetProjectCheckerOptionsFromCache(projFilename, ?properties) : FSharpProjectOptions option =
+        let properties = defaultArg properties ["Configuration", IdeApp.Workspace.ActiveConfigurationId]
+        let key = (projFilename, properties)
+        let entry, _ = (!projectInfoCache).TryFind (key)
+        entry
+
     /// Constructs options for the interactive checker for a project under the given configuration.
-    member x.GetProjectCheckerOptions(projFilename, ?properties) : FSharpProjectOptions option =
-        let properties = defaultArg properties ["Configuration", "Debug"]
+    member x.GetProjectCheckerOptions(projFilename, ?properties, ?referencedAssemblies) : FSharpProjectOptions option =
+        let properties = defaultArg properties ["Configuration", IdeApp.Workspace.ActiveConfigurationId]
         let key = (projFilename, properties)
 
         lock projectInfoCache (fun () ->
@@ -372,19 +410,22 @@ type LanguageService(dirtyNotify) as x =
                 projectInfoCache := cache
                 Some entry
             | _, cache ->
+                showStatusIcon projFilename
                 let project =
                     IdeApp.Workspace.GetAllProjects()
                     |> Seq.tryFind (fun p -> p.FileName.FullPath.ToString() = projFilename)
 
                 match project with
                 | Some proj ->
-                    let opts = x.GetProjectOptionsFromProjectFile (proj :?> DotNetProject)
-
-                    projectInfoCache := cache.Add (key, opts)
-                    // Print contents of check option for debugging purposes
-                    LoggingService.logDebug "GetProjectCheckerOptions: ProjectFileName: %s, ProjectFileNames: %A, ProjectOptions: %A, IsIncompleteTypeCheckEnvironment: %A, UseScriptResolutionRules: %A"
-                        opts.ProjectFileName opts.ProjectFileNames opts.OtherOptions opts.IsIncompleteTypeCheckEnvironment opts.UseScriptResolutionRules
-                    Some opts
+                    let proj = proj :?> DotNetProject
+                    let referencedAssemblies = defaultArg referencedAssemblies (x.GetReferencedAssembliesSynchronously proj)
+                    let opts = x.GetProjectOptionsFromProjectFile (proj, referencedAssemblies)
+                    opts |> Option.bind(fun opts' ->
+                        projectInfoCache := cache.Add (key, opts')
+                        // Print contents of check option for debugging purposes
+                        LoggingService.logDebug "GetProjectCheckerOptions: ProjectFileName: %s, ProjectFileNames: %A, ProjectOptions: %A, IsIncompleteTypeCheckEnvironment: %A, UseScriptResolutionRules: %A"
+                            opts'.ProjectFileName opts'.SourceFiles opts'.OtherOptions opts'.IsIncompleteTypeCheckEnvironment opts'.UseScriptResolutionRules
+                        opts)
                 | None -> None)
 
     member x.StartBackgroundCompileOfProject (projectFilename) =
@@ -409,7 +450,7 @@ type LanguageService(dirtyNotify) as x =
                 let fileName = fixFileName(fileName)
                 match options with
                 | Some opts ->
-                    let! parseResults, checkAnswer = checker.ParseAndCheckFileInProject(fileName, version, src ,opts, obsoleteCheck, null )
+                    let! parseResults, checkAnswer = checker.ParseAndCheckFileInProject(fileName, version, src ,opts, obsoleteCheck)
 
                     // Construct new typed parse result if the task succeeded
                     let results =
@@ -435,7 +476,7 @@ type LanguageService(dirtyNotify) as x =
     /// Parses and checks the given file in the given project under the given configuration.
     ///Asynchronously returns the results of checking the file.
     member x.GetTypedParseResultWithTimeout(projectFilename, fileName, version:int, src:string, stale, ?timeout, ?obsoleteCheck) =
-        let obs = defaultArg obsoleteCheck (IsResultObsolete(fun () -> false))
+        let obs = defaultArg obsoleteCheck (fun () -> false)
         async {
             let fileName = if Path.GetExtension fileName = ".sketchfs" then Path.ChangeExtension (fileName, ".fsx") else fileName
             let options = x.GetCheckerOptions(fileName, projectFilename, src)
@@ -486,10 +527,13 @@ type LanguageService(dirtyNotify) as x =
     member x.GetUsesOfSymbolInProject(projectFilename, file, source, symbol:FSharpSymbol, ?dependentProjects) =
         async {
             LoggingService.logDebug "LanguageService: GetUsesOfSymbolInProject: project:%s, currentFile:%s, symbol:%s" projectFilename file symbol.DisplayName
-
             let sourceProjectOptions = x.GetCheckerOptions(file, projectFilename, source)
-            let dependentProjectsOptions = defaultArg dependentProjects [] |> List.map x.GetProjectCheckerOptions
-            let! allProjectResults =
+
+            let! dependentProjectsOptions =
+                 defaultArg dependentProjects [] 
+                 |> Async.List.map optionsForDependentProject
+
+            let! allProjectResults  =
                 sourceProjectOptions :: dependentProjectsOptions
                 |> List.choose id
                 |> Async.List.map checker.ParseAndCheckProject
@@ -500,13 +544,15 @@ type LanguageService(dirtyNotify) as x =
                 |> Async.Parallel
                 |> Async.map Array.concat
 
-          return allSymbolUses }
+            return allSymbolUses 
+        }
 
     member x.MatchingBraces(filename, projectFilename, source) =
         let options = x.GetCheckerOptions(filename, projectFilename, source)
         match options with
         | Some opts ->
-            checker.MatchBracesAlternate(filename, source, opts)
+            let parseOptions, _errors = x.GetParsingOptionsFromProjectOptions opts
+            checker.MatchBraces(filename, source, parseOptions)
         | None -> async { return [||] }
 
     /// Get all symbols derived from the specified symbol in the current project and optionally all dependent projects
@@ -520,9 +566,9 @@ type LanguageService(dirtyNotify) as x =
                         let isOverrideOrDefault = mfv.IsOverrideOrExplicitInterfaceImplementation
                         let baseTypeMatch() =
                             maybe {
-                                let! ent = mfv.EnclosingEntitySafe
+                                let! ent = mfv.EnclosingEntity
                                 let! bt = ent.BaseType
-                                let! carentEncEnt = caretmfv.EnclosingEntitySafe
+                                let! carentEncEnt = caretmfv.EnclosingEntity
                                 return carentEncEnt.IsEffectivelySameAs bt.TypeDefinition }
 
                         let nameMatch = mfv.DisplayName = caretmfv.DisplayName
@@ -548,7 +594,10 @@ type LanguageService(dirtyNotify) as x =
         async {
             LoggingService.logDebug "LanguageService: GetDerivedSymbolInProject: proj:%s, file:%s, symbol:%s" projectFilename file symbolAtCaret.DisplayName
             let sourceProjectOptions = x.GetCheckerOptions(file, projectFilename, source)
-            let dependentProjectsOptions = defaultArg dependentProjects [] |> List.map x.GetProjectCheckerOptions
+
+            let! dependentProjectsOptions =
+                 defaultArg dependentProjects [] 
+                 |> Async.List.map optionsForDependentProject
 
             let! allProjectResults =
                 sourceProjectOptions :: dependentProjectsOptions

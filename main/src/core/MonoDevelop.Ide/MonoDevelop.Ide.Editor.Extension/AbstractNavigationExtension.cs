@@ -89,6 +89,8 @@ namespace MonoDevelop.Ide.Editor.Extension
 
 		static AbstractNavigationExtension ()
 		{
+			if (IdeApp.Workbench?.RootWindow == null)
+				return;
 			// snooperId =
 				Gtk.Key.SnooperInstall (TooltipKeySnooper);
 			//if (snooperId != 0)
@@ -178,6 +180,8 @@ namespace MonoDevelop.Ide.Editor.Extension
 				y = e.Y;
 			}
 			CancelRequestLinks ();
+			if (!IsHoverNavigationValid (Editor))
+				return;
 			var token = src.Token;
 			if (LinksShown) {
 				var lineNumber = Editor.PointToLocation (x, y).Line;
@@ -196,9 +200,9 @@ namespace MonoDevelop.Ide.Editor.Extension
 					LoggingService.LogError ("Error while requestling navigation links", ex);
 					return;
 				}
-				if (segments == null)
+				if (segments == null || token.IsCancellationRequested)
 					return;
-				await Runtime.RunInMainThread (delegate {
+				await Runtime.RunInMainThread(delegate {
 					try {
 						foreach (var segment in segments) {
 							if (token.IsCancellationRequested) {
@@ -214,6 +218,11 @@ namespace MonoDevelop.Ide.Editor.Extension
 					}
 				});
 			}
+		}
+
+		internal static bool IsHoverNavigationValid (TextEditor editor)
+		{
+			return !editor.IsSomethingSelected;
 		}
 
 		void CancelRequestLinks ()
@@ -233,8 +242,10 @@ namespace MonoDevelop.Ide.Editor.Extension
 
 		void RemoveTimer ()
 		{
-			if (timerId != 0)
+			if (timerId != 0) {
 				GLib.Source.Remove (timerId);
+				timerId = 0;
+			}
 		}
 
 		public override void Dispose ()

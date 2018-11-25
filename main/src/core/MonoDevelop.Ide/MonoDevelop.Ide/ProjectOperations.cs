@@ -411,10 +411,10 @@ namespace MonoDevelop.Ide
 		
 		public Task SaveAsync (SolutionItem entry)
 		{
-			return SaveAsyncInernal (entry);
+			return SaveAsyncInternal (entry);
 		}
 
-		async Task SaveAsyncInernal (SolutionItem entry)
+		async Task SaveAsyncInternal (SolutionItem entry)
 		{
 			if (!entry.FileFormat.CanWriteFile (entry)) {
 				var itemContainer = (IMSBuildFileObject) GetContainer (entry);
@@ -709,12 +709,18 @@ namespace MonoDevelop.Ide
 		
 		public void NewSolution (string defaultTemplate)
 		{
-			if (!IdeApp.Workbench.SaveAllDirtyFiles ())
+			NewSolution (defaultTemplate, true);
+		}
+
+		public async void NewSolution (string defaultTemplate, bool showTemplateSelection)
+		{
+			if (!await IdeApp.Workbench.SaveAllDirtyFiles ())
 				return;
 
 			var newProjectDialog = new NewProjectDialogController ();
 			newProjectDialog.OpenSolution = true;
 			newProjectDialog.SelectedTemplateId = defaultTemplate;
+			newProjectDialog.ShowTemplateSelection = showTemplateSelection;
 			newProjectDialog.Show ();
 		}
 		
@@ -791,11 +797,17 @@ namespace MonoDevelop.Ide
 
 		public SolutionFolderItem CreateProject (SolutionFolder parentFolder, string selectedTemplateId)
 		{
+			return CreateProject (parentFolder, selectedTemplateId, true);
+		}
+
+		public SolutionFolderItem CreateProject (SolutionFolder parentFolder, string selectedTemplateId, bool showTemplateSelection)
+		{
 			string basePath = parentFolder != null ? parentFolder.BaseDirectory : null;
 			var newProjectDialog = new NewProjectDialogController ();
 			newProjectDialog.ParentFolder = parentFolder;
 			newProjectDialog.BasePath = basePath;
 			newProjectDialog.SelectedTemplateId = selectedTemplateId;
+			newProjectDialog.ShowTemplateSelection = showTemplateSelection;
 
 			if (newProjectDialog.Show ()) {
 				var item = newProjectDialog.NewItem as SolutionFolderItem;
@@ -927,7 +939,7 @@ namespace MonoDevelop.Ide
 			SolutionItem prj = item as SolutionItem;
 			if (prj == null) {
 				if (MessageService.Confirm (question, AlertButton.Remove) && IdeApp.Workspace.RequestItemUnload (item))
-					RemoveItemFromSolution (prj);
+					RemoveItemFromSolution (prj).Ignore();
 				return;
 			}
 			
@@ -942,7 +954,7 @@ namespace MonoDevelop.Ide
 					if (MessageService.RunCustomDialog (dlg) == (int) Gtk.ResponseType.Ok) {
 
 						// Remove the project before removing the files to avoid unnecessary events
-						RemoveItemFromSolution (prj);
+						RemoveItemFromSolution (prj).Ignore();
 
 						List<FilePath> files = dlg.GetFilesToDelete ();
 						using (ProgressMonitor monitor = new MessageDialogProgressMonitor (true)) {
@@ -967,18 +979,18 @@ namespace MonoDevelop.Ide
 				}
 			}
 			else if (result == AlertButton.Remove && IdeApp.Workspace.RequestItemUnload (prj)) {
-				RemoveItemFromSolution (prj);
+				RemoveItemFromSolution (prj).Ignore();
 			}
 		}
 		
-		void RemoveItemFromSolution (SolutionFolderItem prj)
+		async Task RemoveItemFromSolution (SolutionFolderItem prj)
 		{
 			foreach (var doc in IdeApp.Workbench.Documents.Where (d => d.Project == prj).ToArray ())
-				doc.Close ();
+				await doc.Close ();
 			Solution sol = prj.ParentSolution;
 			prj.ParentFolder.Items.Remove (prj);
 			prj.Dispose ();
-			IdeApp.ProjectOperations.SaveAsync (sol);
+			await IdeApp.ProjectOperations.SaveAsync (sol);
 		}
 		
 		/// <summary>
@@ -1170,7 +1182,7 @@ namespace MonoDevelop.Ide
 			BuildResult res = null;
 			try {
 				tt.Trace ("Cleaning item");
-				res = await entry.Clean (monitor, IdeApp.Workspace.ActiveConfiguration, operationContext);
+				res = await entry.Clean (monitor, IdeApp.Workspace.ActiveConfiguration, InitOperationContext (entry, operationContext));
 			} catch (Exception ex) {
 				monitor.ReportError (GettextCatalog.GetString ("Clean failed."), ex);
 			} finally {
@@ -1376,7 +1388,7 @@ namespace MonoDevelop.Ide
 			var res = MessageService.AskQuestion (
 				GettextCatalog.GetString ("Outdated Build"),
 				GettextCatalog.GetString ("The project you are executing has changes done after the last time it was compiled. Do you want to continue?"),
-				2,
+				1,
 				AlertButton.Cancel,
 				bBuild,
 				bRun);
@@ -1423,13 +1435,13 @@ namespace MonoDevelop.Ide
 
 			var sei = target as Project;
 			if (sei != null) {
-				if (sei.FastCheckNeedsBuild (configuration))
+				if (sei.FastCheckNeedsBuild (configuration, InitOperationContext (target, new TargetEvaluationContext ())))
 					return true;
 				//TODO: respect solution level dependencies
 				var deps = new HashSet<SolutionItem> ();
 				CollectReferencedItems (sei, deps, configuration);
 				foreach (var dep in deps.OfType<Project> ()) {
-					if (dep.FastCheckNeedsBuild (configuration))
+					if (dep.FastCheckNeedsBuild (configuration, InitOperationContext (target, new TargetEvaluationContext ())))
 						return true;
 				}
 				return false;
@@ -1438,7 +1450,7 @@ namespace MonoDevelop.Ide
 			var sln = target as Solution;
 			if (sln != null) {
 				foreach (var item in sln.GetAllProjects ()) {
-					if (item.FastCheckNeedsBuild (configuration))
+					if (item.FastCheckNeedsBuild (configuration, InitOperationContext (target, new TargetEvaluationContext ())))
 						return true;
 				}
 				return false;
@@ -1505,7 +1517,7 @@ namespace MonoDevelop.Ide
 
 				if (skipPrebuildCheck || result.ErrorCount == 0) {
 					tt.Trace ("Building item");
-					result = await entry.Build (monitor, IdeApp.Workspace.ActiveConfiguration, true, operationContext);
+					result = await entry.Build (monitor, IdeApp.Workspace.ActiveConfiguration, true, InitOperationContext (entry, operationContext));
 				}
 			} catch (Exception ex) {
 				monitor.ReportError (GettextCatalog.GetString ("Build failed."), ex);
@@ -1521,6 +1533,25 @@ namespace MonoDevelop.Ide
 			BuildDone (monitor, result, entry, tt);	// BuildDone disposes the monitor
 
 			return result;
+		}
+
+		/// <summary>
+		/// Initializes the context to be used for build operations. It currently just initializes
+		/// it with the currently selected execution target.
+		/// </summary>
+		T InitOperationContext<T> (IBuildTarget target, T context) where T:OperationContext
+		{
+			OperationContext ctx = context;
+			if (ctx == null)
+				ctx = new OperationContext ();
+			if (ctx.ExecutionTarget == null) {
+				var item = target as SolutionItem;
+				if (item != null)
+					ctx.ExecutionTarget = IdeApp.Workspace.GetActiveExecutionTarget (item);
+				else
+					ctx.ExecutionTarget = IdeApp.Workspace.ActiveExecutionTarget;
+			}
+			return (T)ctx;
 		}
 		
 		// Note: This must run in the main thread
@@ -1772,13 +1803,14 @@ namespace MonoDevelop.Ide
 			//FIXME: it would be really nice if project.Files maintained these hashmaps
 			var vpathsInProject = new Dictionary<FilePath, ProjectFile> ();
 			var filesInProject = new Dictionary<FilePath,ProjectFile> ();
-			foreach (var pf in project.Files) {
-				filesInProject [pf.FilePath] = pf;
-				vpathsInProject [pf.ProjectVirtualPath] = pf;
-			}
 
 			using (monitor)
 			{
+				foreach (var pf in project.Files) {
+					filesInProject [pf.FilePath] = pf;
+					vpathsInProject [pf.ProjectVirtualPath] = pf;
+				}
+
 				for (int i = 0; i < files.Length; i++) {
 					FilePath file = files[i];
 					
@@ -2460,7 +2492,7 @@ namespace MonoDevelop.Ide
 			if (filePath.IsNullOrEmpty)
 				throw new ArgumentNullException ("filePath");
 			foreach (var doc in IdeApp.Workbench.Documents) {
-				if (doc.FileName == filePath) {
+				if (IsSearchedDocument (doc, filePath)) {
 					return doc.Editor;
 				}
 			}
@@ -2472,24 +2504,22 @@ namespace MonoDevelop.Ide
 		{
 			if (IdeApp.Workbench != null) {
 				foreach (var doc in IdeApp.Workbench.Documents) {
-					if (doc.FileName == filePath) {
+					if (IsSearchedDocument (doc, filePath)) {
 						isOpen = true;
 						return doc.Editor;
 					}
 				}
 			}
 
-			bool hadBom;
-			Encoding encoding;
-			var text = TextFileUtility.ReadAllText (filePath, out hadBom, out encoding);
-			var data = TextEditorFactory.CreateNewDocument ();
-			data.UseBOM = hadBom;
-			data.Encoding = encoding;
-			data.MimeType = DesktopService.GetMimeTypeForUri (filePath);
-			data.FileName = filePath;
-			data.Text = text;
+			var data = TextEditorFactory.CreateNewDocument (filePath, DesktopService.GetMimeTypeForUri(filePath));
+
 			isOpen = false;
 			return data;
+		}
+
+		static bool IsSearchedDocument (Document doc, FilePath filePath)
+		{
+			return doc.IsFile && doc.Editor != null && doc.FileName != null && FilePath.PathComparer.Compare (Path.GetFullPath (doc.FileName), filePath) == 0;
 		}
 	}
 }

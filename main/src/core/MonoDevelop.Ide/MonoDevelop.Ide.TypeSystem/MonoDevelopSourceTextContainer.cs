@@ -34,12 +34,14 @@ using System.Reflection;
 using MonoDevelop.Ide.Editor;
 using MonoDevelop.Core.Text;
 using Microsoft.CodeAnalysis.Text;
+using System.Threading.Tasks;
 
 namespace MonoDevelop.Ide.TypeSystem
 {
 	sealed class MonoDevelopSourceTextContainer : SourceTextContainer, IDisposable
 	{
-		readonly ITextDocument document;
+		readonly MonoDevelopWorkspace workspace;
+		readonly TextEditor editor;
 		bool isDisposed;
 		SourceText currentText;
 
@@ -48,28 +50,51 @@ namespace MonoDevelop.Ide.TypeSystem
 			private set;
 		}
 
-		public MonoDevelopSourceTextContainer (DocumentId documentId, ITextDocument document) : this (document)
+		internal TextEditor Editor {
+			get {
+				return editor;
+			}
+		}
+
+		public MonoDevelopSourceTextContainer (MonoDevelopWorkspace workspace, DocumentId documentId, TextEditor document) : this (document)
 		{
+			this.workspace = workspace;
 			Id = documentId;
 		}
 
-		public MonoDevelopSourceTextContainer (ITextDocument document)
+		public MonoDevelopSourceTextContainer (TextEditor editor)
 		{
-			this.document = document;
-			this.document.TextChanging += HandleTextReplacing;
+			this.editor = editor;
+			this.editor.TextChanging += HandleTextReplacing;
 		}
-
+		object replaceLock = new object ();
 		void HandleTextReplacing (object sender, Core.Text.TextChangeEventArgs e)
 		{
 			var handler = TextChanged;
 			if (handler != null) {
-				var oldText = CurrentText;
-				var newText = oldText.Replace (e.Offset, e.RemovalLength, e.InsertedText.Text);
-				currentText = newText;
-				try {
-					handler (this, new Microsoft.CodeAnalysis.Text.TextChangeEventArgs (oldText, newText, new TextChangeRange (TextSpan.FromBounds (e.Offset, e.Offset + e.RemovalLength), e.InsertionLength)));
-				} catch (Exception ex) {
-					LoggingService.LogError ("Error while text replacing", ex);
+				lock (replaceLock) {
+					var oldText = CurrentText;
+					var changes = new Microsoft.CodeAnalysis.Text.TextChange[e.TextChanges.Count];
+					var changeRanges = new TextChangeRange[e.TextChanges.Count];
+					for (int i = 0; i < e.TextChanges.Count; ++i) {
+						var c = e.TextChanges[i];
+						var span = new TextSpan (c.Offset, c.RemovalLength);
+						changes[i] = new Microsoft.CodeAnalysis.Text.TextChange (span, c.InsertedText.Text);
+						changeRanges[i] = new TextChangeRange (span, c.InsertionLength);
+					}
+					var newText = oldText.WithChanges (changes);
+					currentText = newText;
+					try {
+						handler (this, new Microsoft.CodeAnalysis.Text.TextChangeEventArgs (oldText, newText, changeRanges));
+					} catch (ArgumentException ae) {
+						LoggingService.LogWarning (ae.Message + " re opening " + editor.FileName + " as roslyn source text.");
+						workspace.InformDocumentClose (Id, editor.FileName);
+						Dispose (); // 100% ensure that this object is disposed
+						if (workspace.GetDocument (Id) != null)
+							TypeSystemService.InformDocumentOpen (Id, editor);
+					} catch (Exception ex) {
+						LoggingService.LogError ("Error while text replacing", ex);
+					}
 				}
 			}
 		}
@@ -79,7 +104,7 @@ namespace MonoDevelop.Ide.TypeSystem
 			if (isDisposed)
 				return;
 			currentText = null;
-			document.TextChanging -= HandleTextReplacing;
+			editor.TextChanging -= HandleTextReplacing;
 			isDisposed = true;
 		}
 
@@ -87,7 +112,7 @@ namespace MonoDevelop.Ide.TypeSystem
 		public override SourceText CurrentText {
 			get {
 				if (currentText == null) {
-					currentText = new MonoDevelopSourceText (document.CreateDocumentSnapshot ());
+					currentText = MonoDevelopSourceText.Create (editor, this);
 				}
 				return currentText;
 			}
@@ -95,7 +120,7 @@ namespace MonoDevelop.Ide.TypeSystem
 
 		public ITextDocument Document {
 			get {
-				return document;
+				return editor;
 			}
 		}
 

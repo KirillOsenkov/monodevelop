@@ -27,10 +27,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using MonoDevelop.Core;
 using MonoDevelop.Projects;
-using NuGet;
 
 namespace MonoDevelop.PackageManagement
 {
@@ -40,7 +40,13 @@ namespace MonoDevelop.PackageManagement
 		IPackageManagementEvents packageManagementEvents;
 		PackageManagementInstrumentationService instrumentationService;
 		List<IInstallNuGetPackageAction> pendingInstallActions = new List<IInstallNuGetPackageAction> ();
-		int runCount;
+		Queue<ActionContext> pendingQueue = new Queue<ActionContext> ();
+
+		struct ActionContext {
+			public List<IPackageAction> Actions;
+			public CancellationTokenSource CancellationTokenSource;
+			public TaskCompletionSource<bool> TaskCompletionSource;
+		};
 
 		public BackgroundPackageActionRunner (
 			IPackageManagementProgressMonitorFactory progressMonitorFactory,
@@ -63,7 +69,7 @@ namespace MonoDevelop.PackageManagement
 		}
 
 		public bool IsRunning {
-			get { return runCount > 0; }
+			get { return pendingQueue.Any () || DispatcherIsDispatching (); }
 		}
 
 		public IEnumerable<IInstallNuGetPackageAction> PendingInstallActions {
@@ -77,35 +83,59 @@ namespace MonoDevelop.PackageManagement
 
 		public void Run (ProgressMonitorStatusMessage progressMessage, IPackageAction action)
 		{
-			Run (progressMessage, new IPackageAction [] { action });
+			Run (progressMessage, action, clearConsole: !IsRunning);
+		}
+
+		public void Run (ProgressMonitorStatusMessage progressMessage, IPackageAction action, bool clearConsole)
+		{
+			Run (progressMessage, new IPackageAction [] { action }, clearConsole);
 		}
 
 		public void Run (ProgressMonitorStatusMessage progressMessage, IEnumerable<IPackageAction> actions)
 		{
-			Run (progressMessage, actions, null);
+			Run (progressMessage, actions, clearConsole: !IsRunning);
+		}
+
+		public void Run (
+			ProgressMonitorStatusMessage progressMessage,
+			IEnumerable<IPackageAction> actions,
+			bool clearConsole)
+		{
+			Run (progressMessage, actions, null, clearConsole);
 		}
 
 		void Run (
 			ProgressMonitorStatusMessage progressMessage,
 			IEnumerable<IPackageAction> actions,
-			TaskCompletionSource<bool> taskCompletionSource)
+			TaskCompletionSource<bool> taskCompletionSource,
+			bool clearConsole)
 		{
 			AddInstallActionsToPendingQueue (actions);
-			packageManagementEvents.OnPackageOperationsStarting ();
-			runCount++;
-
 			List<IPackageAction> actionsList = actions.ToList ();
+			CancellationTokenSource cancellationTokenSource = CreateCancellationTokenForPendingActions (taskCompletionSource, actionsList);
+			packageManagementEvents.OnPackageOperationsStarting ();
+
 			BackgroundDispatch (() => {
-				TryRunActionsWithProgressMonitor (progressMessage, actionsList, taskCompletionSource);
+				PackageManagementCredentialService.Reset ();
+				TryRunActionsWithProgressMonitor (progressMessage, actionsList, taskCompletionSource, clearConsole, cancellationTokenSource);
 				actionsList = null;
+				cancellationTokenSource = null;
 				progressMessage = null;
 			});
 		}
 
 		public Task RunAsync (ProgressMonitorStatusMessage progressMessage, IEnumerable<IPackageAction> actions)
 		{
+			return RunAsync (progressMessage, actions, clearConsole: !IsRunning);
+		}
+
+		public Task RunAsync (
+			ProgressMonitorStatusMessage progressMessage,
+			IEnumerable<IPackageAction> actions,
+			bool clearConsole)
+		{
 			var taskCompletionSource = new TaskCompletionSource<bool> ();
-			Run (progressMessage, actions, taskCompletionSource);
+			Run (progressMessage, actions, taskCompletionSource, clearConsole);
 			return taskCompletionSource.Task;
 		}
 
@@ -116,26 +146,53 @@ namespace MonoDevelop.PackageManagement
 			}
 		}
 
+		CancellationTokenSource CreateCancellationTokenForPendingActions (
+			TaskCompletionSource<bool> taskCompletionSource,
+			List<IPackageAction> actions)
+		{
+			var context = new ActionContext {
+				Actions = actions,
+				CancellationTokenSource = new CancellationTokenSource (),
+				TaskCompletionSource = taskCompletionSource
+			};
+			pendingQueue.Enqueue (context);
+			return context.CancellationTokenSource;
+		}
+
 		void TryRunActionsWithProgressMonitor (
 			ProgressMonitorStatusMessage progressMessage,
 			IList<IPackageAction> actions,
-			TaskCompletionSource<bool> taskCompletionSource)
+			TaskCompletionSource<bool> taskCompletionSource,
+			bool clearConsole,
+			CancellationTokenSource cancellationTokenSource)
 		{
 			try {
-				RunActionsWithProgressMonitor (progressMessage, actions, taskCompletionSource);
+				RunActionsWithProgressMonitor (progressMessage, actions, taskCompletionSource, clearConsole, cancellationTokenSource);
 			} catch (Exception ex) {
 				LoggingService.LogInternalError (ex);
 			} finally {
-				GuiDispatch (() => runCount--);
+				GuiDispatch (() => RemoveCancellationTokenSource ());
 			}
+		}
+
+		/// <summary>
+		/// This queue can be cleared in the Cancel method so check if any items are queued
+		/// before removing anything.
+		/// </summary>
+		void RemoveCancellationTokenSource ()
+		{
+			if (pendingQueue.Any ())
+				pendingQueue.Dequeue ();
 		}
 
 		void RunActionsWithProgressMonitor (
 			ProgressMonitorStatusMessage progressMessage,
 			IList<IPackageAction> installPackageActions,
-			TaskCompletionSource<bool> taskCompletionSource)
+			TaskCompletionSource<bool> taskCompletionSource,
+			bool clearConsole,
+			CancellationTokenSource cancellationTokenSource)
 		{
-			using (ProgressMonitor monitor = progressMonitorFactory.CreateProgressMonitor (progressMessage.Status)) {
+			using (ProgressMonitor monitor = progressMonitorFactory.CreateProgressMonitor (progressMessage.Status, clearConsole, cancellationTokenSource)) {
 				using (PackageManagementEventsMonitor eventMonitor = CreateEventMonitor (monitor, taskCompletionSource)) {
 					try {
 						monitor.BeginTask (null, installPackageActions.Count);
@@ -143,7 +200,8 @@ namespace MonoDevelop.PackageManagement
 						eventMonitor.ReportResult (progressMessage);
 					} catch (Exception ex) {
 						RemoveInstallActions (installPackageActions);
-						eventMonitor.ReportError (progressMessage, ex);
+						bool showPackageConsole = !monitor.CancellationToken.IsCancellationRequested;
+						eventMonitor.ReportError (progressMessage, ex, showPackageConsole);
 					} finally {
 						monitor.EndTask ();
 						GuiDispatch (() => {
@@ -199,6 +257,42 @@ namespace MonoDevelop.PackageManagement
 			}
 		}
 
+		/// <summary>
+		/// Cancels the current action being run and also removes any pending actions.
+		/// </summary>
+		public void Cancel ()
+		{
+			if (!pendingQueue.Any ())
+				return;
+
+			ClearDispatcher ();
+
+			// Cancel the first item on the queue since this may be currently running.
+			ActionContext context = pendingQueue.Dequeue ();
+			context.CancellationTokenSource.Cancel ();
+
+			// The rest of the items queued were not running but may have been added
+			// due to a call to RunAsync so cancel their associated tasks.
+			while (pendingQueue.Count > 0) {
+				context = pendingQueue.Dequeue ();
+				if (context.TaskCompletionSource != null)
+					context.TaskCompletionSource.TrySetCanceled ();
+
+				context.CancellationTokenSource.Dispose ();
+			}
+		}
+
+		/// <summary>
+		/// Returns information about the actions being run or queued to run.
+		/// </summary>
+		public PendingPackageActionsInformation GetPendingActionsInfo ()
+		{
+			var info = new PendingPackageActionsInformation ();
+			foreach (ActionContext context in pendingQueue)
+				info.Add (context.Actions);
+			return info;
+		}
+
 		protected virtual void BackgroundDispatch (Action action)
 		{
 			PackageManagementBackgroundDispatcher.Dispatch (action);
@@ -207,6 +301,19 @@ namespace MonoDevelop.PackageManagement
 		protected virtual void GuiDispatch (Action handler)
 		{
 			Runtime.RunInMainThread (handler);
+		}
+
+		/// <summary>
+		/// This will only remove queued actions not the action currently being run.
+		/// </summary>
+		protected virtual void ClearDispatcher ()
+		{
+			PackageManagementBackgroundDispatcher.Clear ();
+		}
+
+		protected virtual bool DispatcherIsDispatching ()
+		{
+			return PackageManagementBackgroundDispatcher.IsDispatching ();
 		}
 	}
 }

@@ -46,7 +46,7 @@ namespace MonoDevelop.VersionControl.Views
 		ShowBlameBefore
 	}
 	
-	public class BlameWidget : Bin
+	class BlameWidget : Bin
 	{
 		Revision revision;
 		Adjustment vAdjustment;
@@ -128,7 +128,7 @@ namespace MonoDevelop.VersionControl.Views
 			AddChild (hScrollBar);
 
 			var doc = new TextDocument (sourceEditor.TextEditor.Document.Text) {
-				ReadOnly = true,
+				IsReadOnly = true,
 				MimeType = sourceEditor.TextEditor.Document.MimeType,
 			};
 			editor = new MonoTextEditor (doc, sourceEditor.TextEditor.Options);
@@ -336,7 +336,7 @@ namespace MonoDevelop.VersionControl.Views
 		void JumpOverFoldings (ref int line)
 		{
 			int lastFold = -1;
-			foreach (FoldSegment fs in Editor.Document.GetStartFoldings (line).Where (fs => fs.IsFolded)) {
+			foreach (FoldSegment fs in Editor.Document.GetStartFoldings (line).Where (fs => fs.IsCollapsed)) {
 				lastFold = System.Math.Max (fs.EndOffset, lastFold);
 			}
 			if (lastFold > 0) 
@@ -517,14 +517,7 @@ namespace MonoDevelop.VersionControl.Views
 			protected void OnShowBlameBefore ()
 			{
 				var current = menuAnnotation?.Revision;
-				Revision rev;
-
-				if (current == null) {
-					rev = widget.info.History.FirstOrDefault ();
-				} else {
-					rev = current?.GetPrevious ();
-				}
-
+				Revision rev = current?.GetPrevious () ?? widget.info.History.FirstOrDefault ();
 				if (rev == null)
 					return;
 				
@@ -755,7 +748,7 @@ namespace MonoDevelop.VersionControl.Views
 						if (ann != null && line - lineStart > 1) {
 							string msg = GetCommitMessage (lineStart, false);
 							if (!string.IsNullOrEmpty (msg)) {
-								msg = Revision.FormatMessage (msg);
+								msg = RevisionHelpers.FormatMessage (msg);
 
 								layout.SetText (msg);
 								layout.Width = (int)(Allocation.Width * Pango.Scale.PangoScale);

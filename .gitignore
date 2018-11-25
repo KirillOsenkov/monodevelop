@@ -8,9 +8,11 @@
 #build stuff
 obj/
 /main/build/bin
+/main/build/lib
 /main/build/AddIns
 /main/build/data/
 /main/build/locale/
+/main/msbuild/MDBuildTasks/bin
 /extras/*/build
 /extras/*/*/bin
 /main/src/tools/SharpCoco/SharpCoco.exe*
@@ -35,6 +37,8 @@ obj/
 /scripts/configure.exe
 /main/packages
 /main/.nuget/
+pull-package.exe
+/main/tests/StressTest/TestProject/bin
 
 #VS writes these sometimes even when it doesn't change anything
 /main/_UpgradeReport_Files
@@ -60,11 +64,13 @@ autom4te.cache/
 tarballs/
 test-results/
 Thumbs.db
+.vs
 
 #Mac bundle stuff
 *.dmg
 *.app
 /main/build/MacOSX/render.exe
+/main/external/Xamarin.Mac.registrar.full.a
 /main/external/Xamarin.Mac.dll*
 /main/external/libxammac.dylib
 
@@ -83,7 +89,7 @@ Thumbs.db
 /main/missing
 /main/configure
 
-# Autotool-generated Makefiles. 
+# Autotool-generated Makefiles.
 # We have some manually-written makefiles too so can't use a glob
 /main/Makefile
 /main/man/Makefile
@@ -245,3 +251,7 @@ Thumbs.db
 #Visual Studio 2015
 main/.vs/
 main/build/util
+main/po/StripMnemonics.pdb
+main/po/StripMnemonics.exe
+*.binlog
+*.ProjectImports.zip

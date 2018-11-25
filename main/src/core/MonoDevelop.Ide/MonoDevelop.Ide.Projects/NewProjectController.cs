@@ -1,4 +1,4 @@
-﻿//
+﻿﻿//
 // NewProjectDialogController.cs
 //
 // Author:
@@ -43,6 +43,7 @@ using MonoDevelop.Ide.Templates;
 using MonoDevelop.Projects;
 using Xwt.Drawing;
 using System.Threading.Tasks;
+using System.Threading;
 
 namespace MonoDevelop.Ide.Projects
 {
@@ -51,15 +52,16 @@ namespace MonoDevelop.Ide.Projects
 	/// </summary>
 	class NewProjectDialogController : INewProjectDialogController
 	{
+		public event EventHandler ProjectCreationFailed;
+		public event EventHandler ProjectCreated;
+
 		string chooseTemplateBannerText =  GettextCatalog.GetString ("Choose a template for your new project");
-		string configureYourProjectBannerText = GettextCatalog.GetString ("Configure your new project");
 		string configureYourWorkspaceBannerText = GettextCatalog.GetString ("Configure your new workspace");
 		string configureYourSolutionBannerText = GettextCatalog.GetString ("Configure your new solution");
 
 		const string UseGitPropertyName = "Dialogs.NewProjectDialog.UseGit";
 		const string CreateGitIgnoreFilePropertyName = "Dialogs.NewProjectDialog.CreateGitIgnoreFile";
-		const string CreateProjectSubDirectoryPropertyName = "MonoDevelop.Core.Gui.Dialogs.NewProjectDialog.AutoCreateProjectSubdir";
-		const string CreateProjectSubDirectoryInExistingSolutionPropertyName = "Dialogs.NewProjectDialog.AutoCreateProjectSubdirInExistingSolution";
+		internal const string CreateProjectSubDirectoryPropertyName = "MonoDevelop.Core.Gui.Dialogs.NewProjectDialog.AutoCreateProjectSubdir";
 		const string NewSolutionLastSelectedCategoryPropertyName = "Dialogs.NewProjectDialog.LastSelectedCategoryPath";
 		const string NewSolutionLastSelectedTemplatePropertyName = "Dialogs.NewProjectDialog.LastSelectedTemplate";
 		const string NewProjectLastSelectedCategoryPropertyName = "Dialogs.NewProjectDialog.AddNewProjectLastSelectedCategoryPath";
@@ -67,6 +69,7 @@ namespace MonoDevelop.Ide.Projects
 		const string SelectedLanguagePropertyName = "Dialogs.NewProjectDialog.SelectedLanguage";
 
 		List<TemplateCategory> templateCategories;
+		List<SolutionTemplate> recentTemplates;
 		INewProjectDialogBackend dialog;
 		FinalProjectConfigurationPage finalConfigurationPage;
 		TemplateWizardProvider wizardProvider;
@@ -93,6 +96,7 @@ namespace MonoDevelop.Ide.Projects
 		public string BasePath { get; set; }
 		public string SelectedTemplateId { get; set; }
 		public Workspace ParentWorkspace { get; set; }
+		public bool ShowTemplateSelection { get; set; }
 
 		string DefaultSelectedCategoryPath {
 			get {
@@ -156,6 +160,7 @@ namespace MonoDevelop.Ide.Projects
 		public NewProjectDialogController ()
 		{
 			IsFirstPage = true;
+			ShowTemplateSelection = true;
 			GetVersionControlHandler ();
 		}
 
@@ -192,21 +197,15 @@ namespace MonoDevelop.Ide.Projects
 			SetDefaultLocation ();
 			SetDefaultGitSettings ();
 			SelectedLanguage = PropertyService.Get (SelectedLanguagePropertyName, "C#");
-			projectConfiguration.CreateProjectDirectoryInsideSolutionDirectory = GetDefaultCreateProjectDirectorySetting ();
-		}
-
-		bool GetDefaultCreateProjectDirectorySetting ()
-		{
-			if (IsNewSolution) {
-				return PropertyService.Get (CreateProjectSubDirectoryPropertyName, true);
-			}
-			return PropertyService.Get (CreateProjectSubDirectoryInExistingSolutionPropertyName, true);
+			if (IsNewSolution)
+				projectConfiguration.CreateProjectDirectoryInsideSolutionDirectory = PropertyService.Get (CreateProjectSubDirectoryPropertyName, true);
 		}
 
 		void UpdateDefaultSettings ()
 		{
 			UpdateDefaultGitSettings ();
-			UpdateDefaultCreateProjectDirectorySetting ();
+			if (IsNewSolution)
+				PropertyService.Set (CreateProjectSubDirectoryPropertyName, projectConfiguration.CreateProjectDirectoryInsideSolutionDirectory);
 			PropertyService.Set (SelectedLanguagePropertyName, GetLanguageForTemplateProcessing ());
 			DefaultSelectedCategoryPath = GetSelectedCategoryPath ();
 			DefaultSelectedTemplate = GetDefaultSelectedTemplateId ();
@@ -230,21 +229,28 @@ namespace MonoDevelop.Ide.Projects
 			return null;
 		}
 
+		public string GetCategoryPathText (SolutionTemplate template)
+		{
+			foreach (TemplateCategory topLevelCategory in templateCategories) {
+				foreach (TemplateCategory secondLevelCategory in topLevelCategory.Categories) {
+					foreach (TemplateCategory thirdLevelCategory in secondLevelCategory.Categories) {
+						foreach (SolutionTemplate t in thirdLevelCategory.Templates) {
+							if (t.GetTemplate (child => child == template) != null) 
+								return String.Format ("{0} → {1}", topLevelCategory.Name, secondLevelCategory.Name);
+						}
+					}
+				}
+			}
+
+			return null;
+		}
+
 		string GetDefaultSelectedTemplateId ()
 		{
 			if (SelectedTemplate != null) {
 				return SelectedTemplate.Id;
 			}
 			return null;
-		}
-
-		void UpdateDefaultCreateProjectDirectorySetting ()
-		{
-			if (IsNewSolution) {
-				PropertyService.Set (CreateProjectSubDirectoryPropertyName, projectConfiguration.CreateProjectDirectoryInsideSolutionDirectory);
-			} else {
-				PropertyService.Set (CreateProjectSubDirectoryInExistingSolutionPropertyName, projectConfiguration.CreateProjectDirectoryInsideSolutionDirectory);
-			}
 		}
 
 		void SetDefaultLocation ()
@@ -267,7 +273,7 @@ namespace MonoDevelop.Ide.Projects
 			PropertyService.Set (CreateGitIgnoreFilePropertyName, projectConfiguration.CreateGitIgnoreFile);
 		}
 
-		INewProjectDialogBackend CreateNewProjectDialog ()
+		protected virtual INewProjectDialogBackend CreateNewProjectDialog ()
 		{
 			return new GtkNewProjectDialogBackend ();
 		}
@@ -294,6 +300,10 @@ namespace MonoDevelop.Ide.Projects
 			get { return templateCategories; }
 		}
 
+		public List<SolutionTemplate> RecentTemplates {
+			get { return recentTemplates; }
+		}
+
 		public TemplateCategory SelectedSecondLevelCategory { get; private set; }
 		public SolutionTemplate SelectedTemplate { get; set; }
 		public string SelectedLanguage { get; set; }
@@ -310,7 +320,25 @@ namespace MonoDevelop.Ide.Projects
 		void LoadTemplateCategories ()
 		{
 			Predicate<SolutionTemplate> templateMatch = GetTemplateFilter ();
-			templateCategories = IdeApp.Services.TemplatingService.GetProjectTemplateCategories (templateMatch).ToList ();
+			templateCategories = TemplatingService.GetProjectTemplateCategories (templateMatch).ToList ();
+			if (IsNewSolution)
+				recentTemplates = TemplatingService.RecentTemplates.GetTemplates (templateCategories).Where (t => t.IsMatch (SolutionTemplateVisibility.NewSolution)).ToList ();
+			else
+				recentTemplates = TemplatingService.RecentTemplates.GetTemplates (templateCategories).ToList ();
+		}
+
+		// Allow testing of the controller by allowing tests to specify the
+		// TemplatingService. IdeApp.Services is not initialized during unit tests.
+		TemplatingService templatingService;
+
+		internal TemplatingService TemplatingService {
+			get {
+				if (templatingService != null)
+					return templatingService;
+
+				return IdeApp.Services.TemplatingService;
+			}
+			set { templatingService = value; }
 		}
 
 		Predicate<SolutionTemplate> GetTemplateFilter ()
@@ -325,7 +353,14 @@ namespace MonoDevelop.Ide.Projects
 		{
 			if (SelectedTemplateId != null) {
 				SelectTemplate (SelectedTemplateId);
-			} else if (DefaultSelectedCategoryPath != null) {
+			} else if (RecentTemplates.Count > 0) { // select first recently used template if possible
+				var lastUsedTemplate = RecentTemplates.First ();
+				SelectTemplateInCategory (lastUsedTemplate.Category, lastUsedTemplate.Id);
+				// SelectTemplateInCategory has selected the group containing the recent template,
+				// make sure to select the actual recent template inside the group if the group exists
+				if (SelectedTemplate != null)
+					SelectedTemplate = lastUsedTemplate;
+			} else if (DefaultSelectedCategoryPath != null) { // fallback to old DefaultSelected properties
 				if (DefaultSelectedTemplate != null) {
 					SelectTemplateInCategory (DefaultSelectedCategoryPath, DefaultSelectedTemplate);
 				}
@@ -437,14 +472,50 @@ namespace MonoDevelop.Ide.Projects
 		SolutionTemplate GetTemplateForProcessing ()
 		{
 			if (SelectedTemplate.HasCondition) {
-				string language = GetLanguageForTemplateProcessing ();
-				SolutionTemplate template = SelectedTemplate.GetTemplate (language, finalConfigurationPage.Parameters);
+				SolutionTemplate template = GetConditionalTemplateForProcessing ();
 				if (template != null) {
 					return template;
 				}
 				throw new ApplicationException (GettextCatalog.GetString ("No template found matching condition '{0}'.", SelectedTemplate.Condition));
 			}
 			return GetSelectedTemplateForSelectedLanguage ();
+		}
+
+		/// <summary>
+		/// Looks at the SelectedTemplate first to find a template that should be conditionally
+		/// used. If there is no match then all templates in the same category that have the
+		/// same template id are checked. This allows multiple templates with the same id in the
+		/// same category to be supported. .NET Core 2.0 and .NET Core 1.0 project templates
+		/// currently use the same template id so only one item is shown in the recently used
+		/// items list but use different templates.
+		/// </summary>
+		SolutionTemplate GetConditionalTemplateForProcessing ()
+		{
+			string language = GetLanguageForTemplateProcessing ();
+
+			SolutionTemplate template = SelectedTemplate.GetTemplate (language, finalConfigurationPage.Parameters);
+			if (template != null)
+				return template;
+
+			// Fallback to checking all templates that match the template id in the same category
+			// and support the condition.
+			SolutionTemplate matchedTemplate = TemplatingService.GetTemplate (
+				templateCategories,
+				currentTemplate => IsTemplateMatch (currentTemplate, SelectedTemplate, language, finalConfigurationPage.Parameters),
+				category => true,
+				category => true);
+
+			if (matchedTemplate != null)
+				return matchedTemplate.GetTemplate (language, finalConfigurationPage.Parameters);
+
+			return null;
+		}
+
+		static bool IsTemplateMatch (SolutionTemplate template, SolutionTemplate templateToMatch, string language, ProjectCreateParameters parameters)
+		{
+			return template.Id == templateToMatch.Id &&
+				template.Category == templateToMatch.Category &&
+				template.GetTemplate (language, parameters) != null;
 		}
 
 		string GetLanguageForTemplateProcessing ()
@@ -471,7 +542,7 @@ namespace MonoDevelop.Ide.Projects
 			if (FinalConfiguration.IsWorkspace) {
 				return configureYourWorkspaceBannerText;
 			} else if (FinalConfiguration.HasProjects) {
-				return configureYourProjectBannerText;
+				return GettextCatalog.GetString ("Configure your new {0}", FinalConfiguration.Template.Name);
 			}
 			return configureYourSolutionBannerText;
 		}
@@ -543,8 +614,10 @@ namespace MonoDevelop.Ide.Projects
 			if (wizardProvider.HasWizard)
 				wizardProvider.BeforeProjectIsCreated ();
 
-			if (!CreateProject ())
+			if (!await CreateProject ()) {
+				ProjectCreationFailed?.Invoke (this, EventArgs.Empty);
 				return;
+			}
 
 			Solution parentSolution = null;
 
@@ -630,6 +703,14 @@ namespace MonoDevelop.Ide.Projects
 
 			IsNewItemCreated = true;
 			UpdateDefaultSettings ();
+
+			var tcs = new TaskCompletionSource<bool> ();
+			Gtk.Application.Invoke ((sender, args) => {
+				ProjectCreated?.Invoke (this, EventArgs.Empty);
+				tcs.SetResult (true);
+			});
+			await tcs.Task;
+
 			dialog.CloseDialog ();
 		}
 
@@ -649,7 +730,7 @@ namespace MonoDevelop.Ide.Projects
 				.ToList ();
 		}
 
-		bool CreateProject ()
+		async Task<bool> CreateProject ()
 		{
 			if (!projectConfiguration.IsValid ()) {
 				MessageService.ShowError (projectConfiguration.GetErrorMessage ());
@@ -694,7 +775,7 @@ namespace MonoDevelop.Ide.Projects
 			DisposeExistingNewItems ();
 
 			try {
-				result = IdeApp.Services.TemplatingService.ProcessTemplate (template, projectConfiguration, ParentFolder);
+				result = await TemplatingService.ProcessTemplate (template, projectConfiguration, ParentFolder);
 				if (!result.WorkspaceItems.Any ())
 					return false;
 			} catch (UserException ex) {
@@ -795,26 +876,22 @@ namespace MonoDevelop.Ide.Projects
 
 		static void RunTemplateActions (ProcessedTemplateResult templateResult)
 		{
-			const string gettingStartedHint = "getting-started://";
-
 			foreach (string action in templateResult.Actions) {
-				// handle url schemed actions like opening the getting started page (if any)
-				if (action.StartsWith (gettingStartedHint, StringComparison.OrdinalIgnoreCase)) {
-					var items = templateResult.WorkspaceItems.ToList ();
-					if (items.OfType<Solution> ().Any ()) {
-						// this is a solution that's been instantiated, lets just look for the first project
-						var p = IdeApp.Workspace.GetAllProjects ().FirstOrDefault ();
-						if (p != null) {
-							GettingStarted.GettingStarted.ShowGettingStarted (p, action.Substring (gettingStartedHint.Length));
-						}
-						continue;
-					}
-				}
-
 				var fileName = Path.Combine (templateResult.ProjectBasePath, action);
-				if (File.Exists (fileName)) {
+				if (File.Exists (fileName))
 					IdeApp.Workbench.OpenDocument (fileName, project: null);
-				}
+			}
+
+			// Notify supporting GettingStarted providers
+			Project firstProject = null;
+			if (templateResult.WorkspaceItems.OfType<Solution> ().Any ())
+				// this is a solution that's been instantiated, lets just look for the first project
+				firstProject = IdeApp.Workspace.GetAllProjects ().FirstOrDefault ();
+			else
+				firstProject = templateResult.WorkspaceItems.OfType<Project> ().FirstOrDefault ();
+			if (firstProject != null) {
+				var gettingStartedProvider = GettingStarted.GettingStarted.GetGettingStartedProvider (firstProject);
+				gettingStartedProvider?.SupportedProjectCreated (templateResult);
 			}
 		}
 

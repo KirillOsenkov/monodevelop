@@ -52,6 +52,7 @@ namespace MonoDevelop.Core.Assemblies
 		object initLock = new object ();
 		object initEventLock = new object ();
 		bool initialized;
+		bool frameworksInitialized;
 		bool initializing;
 		bool backgroundInitialize;
 		bool extensionInitialized;
@@ -63,7 +64,9 @@ namespace MonoDevelop.Core.Assemblies
 		ComposedAssemblyContext composedAssemblyContext;
 		ITimeTracker timer;
 		TargetFramework[] customFrameworks = new TargetFramework[0];
-		
+
+		static int internalIdCounter;
+
 		protected bool ShuttingDown { get; private set; }
 		
 		public TargetRuntime ()
@@ -72,6 +75,8 @@ namespace MonoDevelop.Core.Assemblies
 			composedAssemblyContext = new ComposedAssemblyContext ();
 			composedAssemblyContext.Add (Runtime.SystemAssemblyService.UserAssemblyContext);
 			composedAssemblyContext.Add (assemblyContext);
+
+			InternalId = Interlocked.Increment (ref internalIdCounter);
 			
 			Runtime.ShuttingDown += delegate {
 				ShuttingDown = true;
@@ -140,6 +145,12 @@ namespace MonoDevelop.Core.Assemblies
 		/// Returns 'true' if this runtime is the one currently running MonoDevelop.
 		/// </summary>
 		public abstract bool IsRunning { get; }
+
+		/// <summary>
+		/// Internal id, to be used at run time
+		/// </summary>
+		/// <value>The internal identifier.</value>
+		internal int InternalId { get; private set; }
 		
 		public virtual IEnumerable<FilePath> GetReferenceFrameworkDirectories ()
 		{
@@ -178,10 +189,7 @@ namespace MonoDevelop.Core.Assemblies
 			}
 		}
 
-		/// <summary>
-		/// Given an assembly file name, returns the corresponding debug information file name.
-		/// (.mdb for Mono, .pdb for MS.NET)
-		/// </summary>
+		[Obsolete ("Use DotNetProject.GetAssemblyDebugInfoFile()")]
 		public abstract string GetAssemblyDebugInfoFile (string assemblyPath);
 		
 		/// <summary>
@@ -245,12 +253,7 @@ namespace MonoDevelop.Core.Assemblies
 				TargetFrameworkBackend backend;
 				if (frameworkBackends.TryGetValue (fx.Id, out backend))
 					return backend;
-				backend = fx.CreateBackendForRuntime (this);
-				if (backend == null) {
-					backend = CreateBackend (fx);
-					if (backend == null)
-						backend = new NotSupportedFrameworkBackend ();
-				}
+				backend = CreateBackend (fx) ?? new NotSupportedFrameworkBackend ();
 				backend.Initialize (this, fx);
 				frameworkBackends[fx.Id] = backend;
 				return backend;
@@ -340,6 +343,7 @@ namespace MonoDevelop.Core.Assemblies
 		internal protected abstract IEnumerable<string> GetGacDirectories ();
 		
 		EventHandler initializedEvent;
+		EventHandler frameworksInitializedEvent;
 
 		/// <summary>
 		/// This event is fired when the runtime has finished initializing. Runtimes are initialized
@@ -361,6 +365,24 @@ namespace MonoDevelop.Core.Assemblies
 			remove {
 				lock (initEventLock) {
 					initializedEvent -= value;
+				}
+			}
+		}
+		
+		internal event EventHandler FrameworksInitialized {
+			add {
+				lock (initEventLock) {
+					if (frameworksInitialized) {
+						if (!ShuttingDown)
+							value (this, EventArgs.Empty);
+					}
+					else
+						frameworksInitializedEvent += value;
+				}
+			}
+			remove {
+				lock (initEventLock) {
+					frameworksInitializedEvent -= value;
 				}
 			}
 		}
@@ -434,6 +456,16 @@ namespace MonoDevelop.Core.Assemblies
 			if (ShuttingDown)
 				return;
 			
+			lock (initEventLock) {
+				frameworksInitialized = true;
+				try {
+					if (frameworksInitializedEvent != null && !ShuttingDown)
+						frameworksInitializedEvent (this, EventArgs.Empty);
+				} catch (Exception ex) {
+					LoggingService.LogError ("Error while initializing the runtime: " + Id, ex);
+				}
+			}
+
 			timer.Trace ("Initializing frameworks");
 			OnInitialize ();
 		}

@@ -89,6 +89,10 @@ namespace MonoDevelop.PackageManagement
 			projectName = dotNetProject.Name;
 		}
 
+		public PackageActionType ActionType {
+			get { return PackageActionType.Install; }
+		}
+
 		public void Execute ()
 		{
 			Execute (CancellationToken.None);
@@ -167,11 +171,15 @@ namespace MonoDevelop.PackageManagement
 			var missingPackages = packages.Select (IsMissingForCurrentProject).ToList ();
 			if (missingPackages.Any ()) {
 				using (var monitor = new PackageRestoreMonitor (restoreManager, packageManagementEvents)) {
-					await restoreManager.RestoreMissingPackagesAsync (
-						solutionManager.SolutionDirectory,
-						project,
-						context,
-						cancellationToken);
+					using (var cacheContext = new SourceCacheContext ()) {
+						var downloadContext = new PackageDownloadContext (cacheContext);
+						await restoreManager.RestoreMissingPackagesAsync (
+							solutionManager.SolutionDirectory,
+							project,
+							context,
+							downloadContext,
+							cancellationToken);
+					}
 				}
 
 				await RunInMainThread (() => dotNetProject.RefreshReferenceStatus ());

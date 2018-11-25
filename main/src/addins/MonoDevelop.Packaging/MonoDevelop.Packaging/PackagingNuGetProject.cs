@@ -55,14 +55,17 @@ namespace MonoDevelop.Packaging
 			InternalMetadata.Add (NuGetProjectMetadataKeys.UniqueName, project.Name);
 		}
 
-		public override async Task<IEnumerable<NuGet.Packaging.PackageReference>> GetInstalledPackagesAsync (CancellationToken token)
+		public override Task<IEnumerable<NuGet.Packaging.PackageReference>> GetInstalledPackagesAsync (CancellationToken token)
 		{
-			return await Runtime.RunInMainThread (() => {
-				return project
-					.PackageReferences
-					.Select (packageReference => packageReference.ToNuGetPackageReference ())
-					.ToList ();
-			});
+			return Task.FromResult (GetPackageReferences ());
+		}
+
+		IEnumerable<NuGet.Packaging.PackageReference> GetPackageReferences ()
+		{
+			return project
+				.PackageReferences
+				.Select (packageReference => packageReference.ToNuGetPackageReference ())
+				.ToList ();
 		}
 
 		public override async Task<bool> InstallPackageAsync (
@@ -74,7 +77,7 @@ namespace MonoDevelop.Packaging
 			return await Runtime.RunInMainThread (async () => {
 
 				// Check if this NuGet package is already installed and should be removed.
-				PackageReference existingPackageReference = project.FindPackageReference (packageIdentity);
+				ProjectPackageReference existingPackageReference = project.FindPackageReference (packageIdentity);
 				if (existingPackageReference != null) {
 					if (ShouldRemoveExistingPackageReference (existingPackageReference, packageIdentity)) {
 						project.PackageReferences.Remove (existingPackageReference);
@@ -94,9 +97,9 @@ namespace MonoDevelop.Packaging
 					GenerateNuGetBuildPackagingTargets (packageIdentity);
 				}
 
-				var packageReference = new PackageReference (packageIdentity);
+				var packageReference = ProjectPackageReference.Create (packageIdentity);
 				if (developmentDependency)
-					packageReference.PrivateAssets = "All";
+					packageReference.Metadata.SetValue ("PrivateAssets", "All");
 				project.PackageReferences.Add (packageReference);
 				await SaveProject ();
 				return true;
@@ -109,7 +112,7 @@ namespace MonoDevelop.Packaging
 			CancellationToken token)
 		{
 			return await Runtime.RunInMainThread (() => {
-				PackageReference packageReference = project.FindPackageReference (packageIdentity);
+				ProjectPackageReference packageReference = project.FindPackageReference (packageIdentity);
 				if (packageReference != null) {
 					project.PackageReferences.Remove (packageReference);
 					SaveProject ();
@@ -122,7 +125,7 @@ namespace MonoDevelop.Packaging
 		/// If the package version is already installed then there is no need to install the 
 		/// NuGet package.
 		/// </summary>
-		bool ShouldRemoveExistingPackageReference (PackageReference packageReference, PackageIdentity packageIdentity)
+		bool ShouldRemoveExistingPackageReference (ProjectPackageReference packageReference, PackageIdentity packageIdentity)
 		{
 			var existingPackageReference = packageReference.ToNuGetPackageReference ();
 			return !VersionComparer.Default.Equals (existingPackageReference.PackageIdentity.Version, packageIdentity.Version);
@@ -152,6 +155,10 @@ namespace MonoDevelop.Packaging
 		public Task SaveProject ()
 		{
 			return project.SaveAsync (new ProgressMonitor ());
+		}
+
+		public IDotNetProject Project {
+			get { return new DotNetProjectProxy (project); }
 		}
 	}
 }

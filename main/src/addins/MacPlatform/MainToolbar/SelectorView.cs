@@ -54,7 +54,7 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 	}
 
 	[Register]
-	class SelectorView : NSButton
+	class SelectorView : NSFocusButton
 	{
 		public event EventHandler<EventArgs> SizeChanged;
 		internal const int RunConfigurationIdx = 0;
@@ -71,9 +71,18 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 			BezelStyle = NSBezelStyle.TexturedRounded;
 			Title = "";
 
+			var nsa = (INSAccessibility)this;
+			nsa.AccessibilityElement = false;
+
 			RealSelectorView = new PathSelectorView (new CGRect (6, 0, 1, 1));
 			RealSelectorView.UnregisterDraggedTypes ();
 			AddSubview (RealSelectorView);
+
+			// Disguise this NSButton as a group
+			AccessibilityRole = NSAccessibilityRoles.GroupRole;
+
+			// For some reason AddSubview hasn't added RealSelectorView as an accessibility child of SelectorView
+			nsa.AccessibilityChildren = new NSObject [] { RealSelectorView };
 		}
 
 		public override CGSize SizeThatFits (CGSize size)
@@ -136,6 +145,9 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 			static readonly string RunConfigurationPlaceholder = GettextCatalog.GetString ("Default");
 			static readonly string ConfigurationPlaceholder = GettextCatalog.GetString ("Default");
 			static readonly string RuntimePlaceholder = GettextCatalog.GetString ("Default");
+			static readonly string RunConfigurationIdentifier = "RunConfiguration";
+			static readonly string ConfigurationIdentifier = "Configuration";
+			static readonly string RuntimeIdentifier = "Runtime";
 
 			static nfloat iconSize = 28;
 			nfloat AddCellSize (int cellId, nfloat totalWidth, nfloat layoutWidth, nfloat allIconsWidth)
@@ -151,6 +163,19 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 				return iconSize;
 			}
 
+			int IndexFromIdentifier (string identifier)
+			{
+				int i = 0;
+				foreach (var cell in Cells) {
+					if (cell.Identifier == identifier) {
+						return i;
+					}
+					i++;
+				}
+
+				throw new Exception ($"No cell with {identifier} found");
+			}
+
 			public override CGSize SizeThatFits (CGSize size)
 			{
 				int n = 0;
@@ -161,7 +186,7 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 				totalWidth += AddCellSize (LastSelectedCell, totalWidth, size.Width, allIconsWidth);
 
 				for (;n < VisibleCells.Length; n++) {
-					int cellId = VisibleCellIds [n];
+					var cellId = VisibleCellIds [n];
 					if (cellId == LastSelectedCell)
 						continue;
 					
@@ -262,6 +287,12 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 						Enabled = mutableModel.Enabled,
 						Hidden = !mutableModel.Visible,
 					};
+					if (!string.IsNullOrEmpty (runtime.Image)) {
+						menuItem.Image = ImageService.GetIcon (runtime.Image).ToNSImage ();
+					}
+					if (!string.IsNullOrEmpty (runtime.Tooltip)) {
+						menuItem.ToolTip = runtime.Tooltip;
+					}
 					if (ActiveRuntime == runtime || (ActiveRuntime?.Children.Contains (runtime) ?? false)) {
 						menuItem.State = NSCellStateValue.On;
 					}
@@ -280,8 +311,25 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 				return menuItem;
 			}
 
-			NSPathComponentCell [] Cells;
-			NSPathComponentCell [] VisibleCells;
+			class NSPathComponentCellFocusable:NSPathComponentCell
+			{
+				public bool HasFocus { set; get; }
+				public override void DrawWithFrame (CGRect cellFrame, NSView inView)
+				{
+					var isPathSelectorViewResponder = inView.Window.FirstResponder is PathSelectorView;
+					if (HasFocus && isPathSelectorViewResponder ) {
+						var focusRect = new CGRect (cellFrame.X , cellFrame.Y + 3, cellFrame.Width+2, cellFrame.Height - 6);
+						var path = NSBezierPath.FromRoundedRect (focusRect, 3, 3);
+						path.LineWidth = 2f;
+						NSColor.KeyboardFocusIndicator.SetStroke ();
+						path.Stroke ();
+					}
+					base.DrawWithFrame (cellFrame, inView);
+				}
+			}
+
+			NSPathComponentCellFocusable [] Cells;
+			NSPathComponentCellFocusable [] VisibleCells;
 			int [] VisibleCellIds;
 
 			int lastSelectedCell;
@@ -297,23 +345,30 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 			NSImage projectImageDisabled = MultiResImage.CreateMultiResImage ("project", "disabled");
 			NSImage deviceImage = MultiResImage.CreateMultiResImage ("device", "");
 			NSImage deviceImageDisabled = MultiResImage.CreateMultiResImage ("device", "disabled");
+
+			string lastDeviceIconId;
+			NSImage lastDeviceImage;
+			NSImage lastDeviceImageDisabled;
 			public PathSelectorView (CGRect frameRect) : base (frameRect)
 			{
 				Cells = new [] {
-					new NSPathComponentCell {
+					new NSPathComponentCellFocusable {
 						Image = projectImageDisabled,
 						Title = TextForActiveRunConfiguration,
 						Enabled = false,
+						Identifier = RunConfigurationIdentifier
 					},
-					new NSPathComponentCell {
+					new NSPathComponentCellFocusable {
 						Image = projectImageDisabled,
 						Title = TextForActiveConfiguration,
 						Enabled = false,
+						Identifier = ConfigurationIdentifier
 					},
-					new NSPathComponentCell {
+					new NSPathComponentCellFocusable {
 						Image = deviceImageDisabled,
 						Title = TextForRuntimeConfiguration,
 						Enabled = false,
+						Identifier = RuntimeIdentifier
 					}
 				};
 				SetVisibleCells (RunConfigurationIdx, ConfigurationIdx, RuntimeIdx);
@@ -324,13 +379,18 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 				FocusRingType = NSFocusRingType.None;
 
 				Ide.Gui.Styles.Changed += UpdateStyle;
+
+				var nsa = (INSAccessibility)this;
+				nsa.AccessibilityIdentifier = "ConfigurationSelector";
+				nsa.AccessibilityLabel = GettextCatalog.GetString ("Configuration Selector");
+				nsa.AccessibilityHelp = GettextCatalog.GetString ("Set the project runtime configuration");
 			}
 
 			void SetVisibleCells (params int[] ids)
 			{
 				VisibleCellIds = ids;
 				LastSelectedCell = ids [0];
-				VisibleCells = new NSPathComponentCell [ids.Length];
+				VisibleCells = new NSPathComponentCellFocusable [ids.Length];
 				for (int n = 0; n < ids.Length; n++)
 					VisibleCells [n] = Cells [ids [n]];
 				PathComponentCells = VisibleCells;
@@ -352,11 +412,23 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 				return -1;
 			}
 
+			public override bool AccessibilityPerformShowMenu ()
+			{
+				if (ClickedPathComponentCell == null) {
+					return false;
+				}
+
+				PopupMenuForCell (ClickedPathComponentCell);
+
+				return true;
+			}
+
 			public override void MouseDown (NSEvent theEvent)
 			{
 				if (!Enabled)
 					return;
 
+				// Can't use ClickedPathComponentCell here because it is only set on MouseUp
 				var locationInView = ConvertPointFromView (theEvent.LocationInWindow, null);
 
 				var cellIdx = IndexOfCellAtX (locationInView.X);
@@ -368,6 +440,59 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 				if (item == null || !item.Enabled)
 					return;
 
+				PopupMenuForCell (item);
+			}
+
+			int focusedCellIndex = 1;
+			NSPathComponentCellFocusable focusedItem;
+
+			public override void KeyDown (NSEvent theEvent)
+			{
+				if(theEvent.Characters == " ")
+				{
+					var item = Cells [focusedCellIndex];
+					PopupMenuForCell (item);
+					return;
+				}
+
+				if (theEvent.Characters == "\t") {
+					focusedCellIndex++;
+					if(focusedCellIndex > VisibleCells.Count ()){
+						if (NextKeyView != null) {
+							Window.MakeFirstResponder (NextKeyView);
+							SetSelection ();
+							focusedCellIndex = 1;
+							focusedItem = null;
+							return;
+						}
+					}
+				}
+
+				SetSelection ();
+				base.KeyDown (theEvent);
+			}
+
+			void SetSelection ()
+			{
+				if (focusedItem != null) {
+					focusedItem.HasFocus = false;
+				}
+				if (focusedCellIndex < Cells.Count ()) {
+					var item = Cells [focusedCellIndex];
+					focusedItem = item;
+					item.HasFocus = true;
+				}
+				SetNeedsDisplay ();
+			}
+
+			public override bool BecomeFirstResponder ()
+			{
+				SetSelection ();
+				return base.BecomeFirstResponder ();
+			}
+
+			void PopupMenuForCell (NSPathComponentCell item)
+			{
 				var componentRect = ((NSPathCell)Cell).GetRect (item, Frame, this);
 				int i = 0;
 
@@ -377,7 +502,8 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 					ShowsStateColumn = true,
 					Font = NSFont.MenuFontOfSize (12),
 				};
-				if (cellIdx == RunConfigurationIdx) {
+
+				if (item.Identifier == RunConfigurationIdentifier) {
 					if (ActiveRunConfiguration == null)
 						return;
 
@@ -396,7 +522,7 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 						if (selectedItem == null && configuration.OriginalId == ActiveRunConfiguration.OriginalId)
 							selectedItem = menuitem;
 					}
-				} else if (cellIdx == ConfigurationIdx) {
+				} else if (item.Identifier == ConfigurationIdentifier) {
 					if (ActiveConfiguration == null)
 						return;
 
@@ -415,7 +541,7 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 						if (selectedItem == null && configuration.OriginalId == ActiveConfiguration.OriginalId)
 							selectedItem = menuitem;
 					}
-				} else if (cellIdx == RuntimeIdx) {
+				} else if (item.Identifier == RuntimeIdentifier) {
 					if (ActiveRuntime == null)
 						return;
 
@@ -438,7 +564,7 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 				} else
 					throw new NotSupportedException ();
 				
-				LastSelectedCell = cellIdx;
+				LastSelectedCell = IndexFromIdentifier (item.Identifier);
 				if (menu.Count > 1) {
 					var offs = new CGPoint (componentRect.Left + 3, componentRect.Top + 3);
 
@@ -501,20 +627,49 @@ namespace MonoDevelop.MacIntegration.MainToolbar
 				UpdateImages ();
 			}
 
+			static NSImage FixImageServiceImage (Xwt.Drawing.Image image, double scale, string[] styles)
+			{
+				NSImage result = image.WithStyles (styles).ToBitmap (scale).ToNSImage ();
+				result.Template = true;
+				return result;
+			}
+
+			NSImage GetDeviceImage (bool enabled)
+			{
+				if (ActiveRuntime == null || string.IsNullOrEmpty (ActiveRuntime.Image))
+					return enabled ? deviceImage : deviceImageDisabled;
+				if (ActiveRuntime.Image == lastDeviceIconId)
+					return enabled ? lastDeviceImage : lastDeviceImageDisabled;
+
+				lastDeviceIconId = ActiveRuntime.Image;
+				var scale = GtkWorkarounds.GetScaleFactor (Ide.IdeApp.Workbench.RootWindow);
+				Xwt.Drawing.Image baseIcon = ImageService.GetIcon (ActiveRuntime.Image, Gtk.IconSize.Menu);
+
+				string [] styles, disabledStyles;
+				if (IdeApp.Preferences.UserInterfaceTheme == Theme.Dark) {
+					styles = new [] { "dark" };
+					disabledStyles = new [] { "dark", "disabled" };
+				} else {
+					styles = null;
+					disabledStyles = new [] { "disabled" };
+				}
+
+				lastDeviceImage = FixImageServiceImage (baseIcon, scale, styles);
+				lastDeviceImageDisabled = FixImageServiceImage (baseIcon, scale, disabledStyles);
+				return enabled ? lastDeviceImage : lastDeviceImageDisabled;
+			}
+
 			void UpdateImages ()
 			{
 				NSImage runConfigImage = projectImage;
 				NSImage configImage = projectImage;
-				NSImage runtimeImage = deviceImage;
+				NSImage runtimeImage = GetDeviceImage (Cells [RuntimeIdx].Enabled);
 
 				if (!Cells [RunConfigurationIdx].Enabled)
 					runConfigImage = projectImageDisabled;
 
 				if (!Cells [ConfigurationIdx].Enabled)
 					configImage = projectImageDisabled;
-
-				if (!Cells [ConfigurationIdx].Enabled)
-					runtimeImage = deviceImageDisabled;
 
 				// HACK
 				// For some reason NSPathControl does not like the images that ImageService provides. To use them it requires

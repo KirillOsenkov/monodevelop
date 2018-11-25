@@ -33,6 +33,7 @@ using System.Linq;
 using MonoDevelop.Components;
 using MonoDevelop.Ide.Editor;
 using MonoDevelop.Ide.Gui.Content;
+using Microsoft.CodeAnalysis.CSharp.Formatting;
 
 
 namespace MonoDevelop.CSharp.Formatting
@@ -87,6 +88,10 @@ namespace MonoDevelop.CSharp.Formatting
 		{
 			// ReSharper disable once DoNotCallOverridableMethodsInConstructor
 			this.Build ();
+			this.DefaultWidth = 1400;
+			this.DefaultHeight = 600;
+			this.hpaned1.Position = (int)(DefaultWidth * 0.618);
+
 			this.profile = profile;
 			this.Title = profile.IsBuiltIn ? GettextCatalog.GetString ("Show built-in profile") : GettextCatalog.GetString ("Edit Profile");
 			
@@ -367,21 +372,20 @@ namespace MonoDevelop.CSharp.Formatting
 			AddOption (newLineOptions, category, "NewLineForMembersInObjectInit", GettextCatalog.GetString ("Place members in object initializers on new line"), @"void Example()
 {
 	new MyObject {
-		A = 1,
-		B = 2
+		A = 1, B = 2
 	};
 }");
 			AddOption (newLineOptions, category, "NewLineForMembersInAnonymousTypes", GettextCatalog.GetString ("Place members in anonymous types on new line"), @"void Example()
 {
 	var c = new
 	{
-		A = 1,
-		B = 2
+		A = 1, B = 2
 	};
 }");
 			AddOption (newLineOptions, category, "NewLineForClausesInQuery", GettextCatalog.GetString ("Place query expression clauses on new line"), @"void Example()
 {
-	from o in col select o.Foo;
+    var q = from a in e
+            from b in e select a * b;
 }");
 			treeviewNewLines.ExpandAll ();
 			#endregion
@@ -501,15 +505,13 @@ namespace MonoDevelop.CSharp.Formatting
 	i[5] = 3;
 }");
 
-			category = AddOption (spacingOptions, null, GettextCatalog.GetString ("Set spacing for brackets"), null);
+			category = AddOption (spacingOptions, null, GettextCatalog.GetString ("Other"), null);
 			AddOption (spacingOptions, category, "SpaceAfterColonInBaseTypeDeclaration", GettextCatalog.GetString ("Insert space after colon for base or interface in type declaration"), @"class Foo : Bar
 {
 }");
 			AddOption (spacingOptions, category, "SpaceAfterComma", GettextCatalog.GetString ("Insert space after comma"), @"void Example()
 {
-	for (int i =0; i < 10, i >5;i++)
-	{
-	}
+	var array = { 1,2,3,4 };
 }");
 			AddOption (spacingOptions, category, "SpaceAfterDot", GettextCatalog.GetString ("Insert space after dot"), @"void Example()
 {
@@ -526,9 +528,7 @@ namespace MonoDevelop.CSharp.Formatting
 }");
 			AddOption (spacingOptions, category, "SpaceBeforeComma", GettextCatalog.GetString ("Insert space before comma"), @"void Example()
 {
-	for (int i =0; i < 10, i >5;i++)
-	{
-	}
+	var array = { 1,2,3,4 };
 }");
 			AddOption (spacingOptions, category, "SpaceBeforeDot", GettextCatalog.GetString ("Insert space before dot"), @"void Example()
 {

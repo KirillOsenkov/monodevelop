@@ -41,6 +41,7 @@ using Microsoft.CodeAnalysis;
 using System.Threading.Tasks;
 using System.Diagnostics;
 using MonoDevelop.Ide.Editor;
+using System.Collections.Immutable;
 
 namespace MonoDevelop.CodeIssues
 {
@@ -95,11 +96,15 @@ namespace MonoDevelop.CodeIssues
 				#endif
 
 				CompilationWithAnalyzers compilationWithAnalyzer;
-				var analyzers = System.Collections.Immutable.ImmutableArray<DiagnosticAnalyzer>.Empty.AddRange (providers);
+				var analyzers = ImmutableArray<DiagnosticAnalyzer>.Empty.AddRange (providers);
 				var diagnosticList = new List<Diagnostic> ();
 				try {
+					var sol = analysisDocument.DocumentContext.AnalysisDocument.Project.Solution;
 					var options = new CompilationWithAnalyzersOptions (
-						null, 
+						new WorkspaceAnalyzerOptions (
+							new AnalyzerOptions (ImmutableArray<AdditionalText>.Empty),
+							sol.Options,
+							sol),
 						delegate (Exception exception, DiagnosticAnalyzer analyzer, Diagnostic diag) {
 							LoggingService.LogError ("Exception in diagnostic analyzer " + diag.Id + ":" + diag.GetMessage (), exception);
 						},
@@ -113,7 +118,11 @@ namespace MonoDevelop.CodeIssues
 					
 					diagnosticList.AddRange (await compilationWithAnalyzer.GetAnalyzerSemanticDiagnosticsAsync (model, null, cancellationToken).ConfigureAwait (false));
 					diagnosticList.AddRange (await compilationWithAnalyzer.GetAnalyzerSyntaxDiagnosticsAsync (model.SyntaxTree, cancellationToken).ConfigureAwait (false));
-				} catch (Exception) {
+				} catch (OperationCanceledException) {
+				} catch (AggregateException ae) {
+					ae.Flatten ().Handle (ix => ix is OperationCanceledException);
+				} catch (Exception ex) {
+					LoggingService.LogError ("Error creating analyzer compilation", ex);
 					return Enumerable.Empty<Result> ();
 				} finally {
 					#if DEBUG

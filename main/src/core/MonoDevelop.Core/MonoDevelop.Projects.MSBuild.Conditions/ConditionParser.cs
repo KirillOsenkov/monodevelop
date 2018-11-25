@@ -32,7 +32,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics.Contracts;
 using System.Text;
-using Microsoft.Build.BuildEngine;
+using Microsoft.Build.Exceptions;
 
 namespace MonoDevelop.Projects.MSBuild.Conditions {
 
@@ -220,9 +220,14 @@ namespace MonoDevelop.Projects.MSBuild.Conditions {
 				if (token.Type == TokenType.Comma)
 					continue;
 					
-				tokenizer.Putback (token);
+				if (token.Type != TokenType.Property)
+					tokenizer.Putback (token);
+
 				e = (ConditionFactorExpression) ParseFactorExpression ();
 				list.Add (e);
+
+				if (token.Type == TokenType.Property)
+					tokenizer.Putback (tokenizer.Token);
 			}
 			
 			return list;

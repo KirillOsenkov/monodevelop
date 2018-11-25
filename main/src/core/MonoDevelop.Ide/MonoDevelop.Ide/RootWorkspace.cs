@@ -58,6 +58,9 @@ namespace MonoDevelop.Ide
 		{
 			items = new RootWorkspaceItemCollection (this);
 
+			currentWorkspaceLoadTask = new TaskCompletionSource<bool> ();
+			currentWorkspaceLoadTask.SetResult (true);
+
 			FileService.FileRenamed += CheckFileRename;
 			
 			// Set the initial active runtime
@@ -354,17 +357,17 @@ namespace MonoDevelop.Ide
 				SavePreferences (it);
 		}
 		
-		public bool Close ()
+		public async Task<bool> Close ()
 		{
-			return Close (true);
+			return await Close (true);
 		}
 
-		public bool Close (bool saveWorkspacePreferencies)
+		public async Task<bool> Close (bool saveWorkspacePreferencies)
 		{
-			return Close (saveWorkspacePreferencies, true);
+			return await Close (saveWorkspacePreferencies, true);
 		}
 		
-		internal bool Close (bool saveWorkspacePreferencies, bool closeProjectFiles)
+		internal async Task<bool> Close (bool saveWorkspacePreferencies, bool closeProjectFiles)
 		{
 			if (Items.Count > 0) {
 				ITimeTracker timer = Counters.CloseWorkspaceTimer.BeginTiming ();
@@ -380,7 +383,7 @@ namespace MonoDevelop.Ide
 
 					if (closeProjectFiles) {
 						foreach (Document doc in IdeApp.Workbench.Documents.ToArray ()) {
-							if (!doc.Close ())
+							if (!await doc.Close ())
 								return false;
 						}
 					}
@@ -399,15 +402,15 @@ namespace MonoDevelop.Ide
 			}
 			return true;
 		}
-		
-		public void CloseWorkspaceItem (WorkspaceItem item, bool closeItemFiles = true)
+
+		public async Task CloseWorkspaceItem (WorkspaceItem item, bool closeItemFiles = true)
 		{
 			if (!Items.Contains (item))
 				throw new InvalidOperationException ("Only top level items can be closed.");
 
 			if (Items.Count == 1 && closeItemFiles) {
 				// There is only one item, close the whole workspace
-				Close (true, closeItemFiles);
+				await Close (true, closeItemFiles);
 				return;
 			}
 
@@ -415,7 +418,7 @@ namespace MonoDevelop.Ide
 				if (closeItemFiles) {
 					var projects = item.GetAllItems<Project> ();
 					foreach (Document doc in IdeApp.Workbench.Documents.Where (d => d.Project != null && projects.Contains (d.Project)).ToArray ()) {
-						if (!doc.Close ())
+						if (!await doc.Close ())
 							return;
 					}
 				}
@@ -439,9 +442,19 @@ namespace MonoDevelop.Ide
 		}
 
 		System.Threading.CancellationTokenSource openingItemCancellationSource;
+		TaskCompletionSource<bool> currentWorkspaceLoadTask;
+		int loadOperationsCount;
+		object loadLock = new object ();
 
 		internal bool WorkspaceItemIsOpening {
-			get { return openingItemCancellationSource != null; }
+			get { return loadOperationsCount > 0; }
+		}
+
+		/// <summary>
+		/// Gets the task that is currently loading a solution
+		/// </summary>
+		internal Task CurrentWorkspaceLoadTask {
+			get { return currentWorkspaceLoadTask.Task; }
 		}
 
 		public Task<bool> OpenWorkspaceItem (FilePath file)
@@ -456,11 +469,35 @@ namespace MonoDevelop.Ide
 
 		public async Task<bool> OpenWorkspaceItem (FilePath file, bool closeCurrent, bool loadPreferences)
 		{
-			if (openingItemCancellationSource != null && closeCurrent) {
-				openingItemCancellationSource.Cancel ();
-				openingItemCancellationSource = null;
+			lock (loadLock) {
+				if (++loadOperationsCount == 1)
+					currentWorkspaceLoadTask = new TaskCompletionSource<bool> ();
+				else {
+					// If there is a load operation in progress, cancel it
+					if (openingItemCancellationSource != null && closeCurrent) {
+						openingItemCancellationSource.Cancel ();
+						openingItemCancellationSource = null;
+					}
+				}
+				if (openingItemCancellationSource == null)
+					openingItemCancellationSource = new System.Threading.CancellationTokenSource ();
 			}
 
+			try {
+				return await OpenWorkspaceItemInternal (file, closeCurrent, loadPreferences);
+			}
+			finally {
+				lock (loadLock) {
+					if (--loadOperationsCount == 0) {
+						openingItemCancellationSource = null;
+						currentWorkspaceLoadTask.SetResult (true);
+					}
+				}
+			}
+		}
+
+		public async Task<bool> OpenWorkspaceItemInternal (FilePath file, bool closeCurrent, bool loadPreferences)
+		{
 			var item = GetAllItems<WorkspaceItem> ().FirstOrDefault (w => w.FileName == file.FullPath);
 			if (item != null) {
 				IdeApp.ProjectOperations.CurrentSelectedWorkspaceItem = item;
@@ -469,15 +506,14 @@ namespace MonoDevelop.Ide
 			}
 
 			if (closeCurrent) {
-				if (!Close ())
+				if (!await Close ())
 					return false;
 			}
 
 			var monitor = IdeApp.Workbench.ProgressMonitors.GetProjectLoadProgressMonitor (true);
 			bool reloading = IsReloading;
 
-			var cancellationSource = openingItemCancellationSource = new System.Threading.CancellationTokenSource ();
-			monitor = monitor.WithCancellationSource (cancellationSource);
+			monitor = monitor.WithCancellationSource (openingItemCancellationSource);
 
 			IdeApp.Workbench.LockGui ();
 			ITimeTracker timer = Counters.OpenWorkspaceItemTimer.BeginTiming ();
@@ -488,8 +524,6 @@ namespace MonoDevelop.Ide
 				timer.End ();
 				monitor.Dispose ();
 				IdeApp.Workbench.UnlockGui ();
-				if (openingItemCancellationSource == cancellationSource)
-					openingItemCancellationSource = null;
 			}
 		}
 		
@@ -572,9 +606,9 @@ namespace MonoDevelop.Ide
 					timer.Trace ("Restoring workspace preferences");
 					await RestoreWorkspacePreferences (item);
 				}
-				timer.Trace ("Reattaching documents");
-				ReattachDocumentProjects (null);
-				monitor.ReportSuccess (GettextCatalog.GetString ("Solution loaded."));
+
+				if (Items.Count == 1 && !reloading)
+					FirstWorkspaceItemRestored?.Invoke (this, new WorkspaceItemEventArgs (item));
 
 				timer.Trace ("Reattaching documents");
 				ReattachDocumentProjects (null);
@@ -719,14 +753,16 @@ namespace MonoDevelop.Ide
 		async Task OnCheckWorkspaceItem (WorkspaceItem item)
 		{
 			if (item.NeedsReload) {
-				IEnumerable<string> closedDocs;
-				if (AllowReload (item.GetAllItems<Project> (), out closedDocs)) {
+				var result = await AllowReload (item.GetAllItems<Project> ());
+				bool allowReload = result.Item1;
+				IEnumerable<string> closedDocs = result.Item2;
+				if (result.Item1) {
 					if (item.ParentWorkspace == null) {
 						string file = item.FileName;
 						try {
 							SetReloading (true);
 							SavePreferences ();
-							CloseWorkspaceItem (item, false);
+							await CloseWorkspaceItem (item, false);
 							await OpenWorkspaceItem (file, false, false);
 						} finally {
 							SetReloading (false);
@@ -735,7 +771,8 @@ namespace MonoDevelop.Ide
 					else {
 						using (ProgressMonitor m = IdeApp.Workbench.ProgressMonitors.GetSaveProgressMonitor (true)) {
 							await item.ParentWorkspace.ReloadItem (m, item);
-							ReattachDocumentProjects (closedDocs);
+							if (closedDocs != null)
+								ReattachDocumentProjects (closedDocs);
 						}
 					}
 
@@ -765,14 +802,17 @@ namespace MonoDevelop.Ide
 				} else if (entry is SolutionFolder) {
 					projects = ((SolutionFolder)entry).GetAllProjects ();
 				}
+
+				var result = await AllowReload (projects);
+				bool allowReload = result.Item1;
+				IEnumerable<string> closedDocs = result.Item2;
 				
-				IEnumerable<string> closedDocs;
-				
-				if (AllowReload (projects, out closedDocs)) {
+				if (allowReload) {
 					using (ProgressMonitor m = IdeApp.Workbench.ProgressMonitors.GetProjectLoadProgressMonitor (true)) {
 						// Root folders never need to reload
 						await entry.ParentFolder.ReloadItem (m, entry);
-						ReattachDocumentProjects (closedDocs);
+						if (closedDocs != null)
+							ReattachDocumentProjects (closedDocs);
 					}
 					return;
 				} else
@@ -794,12 +834,12 @@ namespace MonoDevelop.Ide
 //			return AllowReload (projects, out closedDocs);
 //		}
 		
-		bool AllowReload (IEnumerable projects, out IEnumerable<string> closedDocs)
+		async Task<Tuple<bool, IEnumerable<string>>> AllowReload (IEnumerable projects)
 		{
-			closedDocs = null;
+			IEnumerable<string> closedDocs = null;
 			
 			if (projects == null)
-				return true;
+				return Tuple.Create (true, closedDocs);
 			
 			List<Document> docs = new List<Document> ();
 			foreach (Project p in projects) {
@@ -807,7 +847,7 @@ namespace MonoDevelop.Ide
 			}
 			
 			if (docs.Count == 0)
-				return true;
+				return Tuple.Create (true, closedDocs);
 			
 			// Find a common project reload capability
 			
@@ -844,7 +884,7 @@ namespace MonoDevelop.Ide
 			}
 			if (msg != null) {
 				if (!MessageService.Confirm (GettextCatalog.GetString ("The project '{0}' has been modified by an external application. Do you want to reload it?", docs[0].Project.Name), msg, AlertButton.Reload))
-					return false;
+					return Tuple.Create (true, closedDocs);
 			}
 			
 			List<string> closed = new List<string> ();
@@ -862,8 +902,8 @@ namespace MonoDevelop.Ide
 					};
 					doc.Saved += saved;
 					try {
-						if (!doc.Close ())
-							return false;
+						if (!await doc.Close ())
+							return Tuple.Create (true, closedDocs);
 						else if (!file.IsNullOrEmpty && File.Exists (file))
 							closed.Add (file);
 					} finally {
@@ -873,7 +913,7 @@ namespace MonoDevelop.Ide
 			}
 			closedDocs = closed;
 
-			return true;
+			return Tuple.Create (true, closedDocs);
 		}
 		
 		internal static List<Document> GetOpenDocuments (Project project, bool modifiedOnly)
@@ -894,16 +934,15 @@ namespace MonoDevelop.Ide
 		
 		internal void NotifyItemAdded (WorkspaceItem item)
 		{
-			try {
-				MonoDevelop.Ide.TypeSystem.TypeSystemService.Load (item, null);
-			} catch (Exception ex) {
-				LoggingService.LogError ("Could not load parser database.", ex);
-			}
+			MonoDevelop.Ide.TypeSystem.TypeSystemService.Load (item, null).ContinueWith(t => {
+				if (t.IsFaulted)
+					LoggingService.LogError("Could not load parser database.", t.Exception);
+			});
 			if (Runtime.IsMainThread)
 				NotifyItemAddedGui (item, IsReloading);
 			else {
 				bool reloading = IsReloading;
-				Gtk.Application.Invoke (delegate {
+				Gtk.Application.Invoke ((o, args) => {
 					NotifyItemAddedGui (item, reloading);
 				});
 			}
@@ -937,7 +976,7 @@ namespace MonoDevelop.Ide
 				NotifyItemRemovedGui (item, IsReloading);
 			else {
 				bool reloading = IsReloading;
-				Gtk.Application.Invoke (delegate {
+				Gtk.Application.Invoke ((o, args) => {
 					NotifyItemRemovedGui (item, reloading);
 				});
 			}
@@ -1057,7 +1096,7 @@ namespace MonoDevelop.Ide
 			// Delay the notification of this event to ensure that the new project is properly
 			// registered in the parser database when it is fired
 			
-			Gtk.Application.Invoke (delegate {
+			Gtk.Application.Invoke ((o2, a2) => {
 				if (ItemAddedToSolution != null)
 					ItemAddedToSolution (sender, args);
 			});
@@ -1191,6 +1230,12 @@ namespace MonoDevelop.Ide
 		/// is no other item already open
 		/// </summary>
 		public event EventHandler<WorkspaceItemEventArgs> FirstWorkspaceItemOpened;
+
+		/// <summary>
+		/// Fired when a workspace item (a solution or workspace) is fully restored and there
+		/// is no other item already open 
+		/// </summary>
+		internal event EventHandler<WorkspaceItemEventArgs> FirstWorkspaceItemRestored;
 		
 		/// <summary>
 		/// Fired a workspace item loaded in the IDE is closed and there are no other

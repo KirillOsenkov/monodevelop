@@ -25,7 +25,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-using Gtk; 
+using Gtk;
 
 using System;
 using MonoDevelop.Ide.Gui;
@@ -33,12 +33,13 @@ using System.Linq;
 using MonoDevelop.Core;
 using MonoDevelop.Ide;
 using MonoDevelop.Components;
+using MonoDevelop.Components.AtkCocoaHelper;
 using MonoDevelop.Ide.Fonts;
 
 namespace MonoDevelop.Components.Docking
 {
-	
-	class DockItemTitleTab: Gtk.EventBox
+
+	class DockItemTitleTab : Gtk.EventBox
 	{
 		static Xwt.Drawing.Image dockTabActiveBackImage = Xwt.Drawing.Image.FromResource ("padbar-active.9.png");
 		static Xwt.Drawing.Image dockTabBackImage = Xwt.Drawing.Image.FromResource ("padbar-inactive.9.png");
@@ -50,13 +51,16 @@ namespace MonoDevelop.Components.Docking
 		int minWidth;
 		DockVisualStyle visualStyle;
 		ImageView tabIcon;
+		Gtk.HBox box;
 		DockFrame frame;
 		string label;
 		ImageButton btnDock;
 		ImageButton btnClose;
+		Gtk.Alignment al;
 		DockItem item;
 		bool allowPlaceholderDocking;
 		bool mouseOver;
+		Widget currentFocus = null; // Currently focused child
 
 		IDisposable subscribedLeaveEvent;
 
@@ -68,6 +72,8 @@ namespace MonoDevelop.Components.Docking
 
 		static readonly Xwt.WidgetSpacing TabPadding;
 		static readonly Xwt.WidgetSpacing TabActivePadding;
+
+		internal event EventHandler<EventArgs> TabPressed;
 
 		static DockItemTitleTab ()
 		{
@@ -92,9 +98,17 @@ namespace MonoDevelop.Components.Docking
 				tabActiveBackImage9 = dockTabActiveBackImage as Xwt.Drawing.NinePatchImage;
 			TabActivePadding = tabActiveBackImage9.Padding;
 		}
-		
+
 		public DockItemTitleTab (DockItem item, DockFrame frame)
 		{
+			var actionHandler = new ActionDelegate (this);
+			actionHandler.PerformPress += HandlePress;
+			actionHandler.PerformShowMenu += HandleShowMenu;
+
+			Accessible.SetRole (AtkCocoa.Roles.AXGroup, "pad header");
+			Accessible.SetSubRole ("XAPadHeader");
+
+			CanFocus = true;
 			this.item = item;
 			this.frame = frame;
 			this.VisibleWindow = false;
@@ -133,7 +147,7 @@ namespace MonoDevelop.Components.Docking
 			else
 				inactiveIconAlpha = 0.6;
 
-			if (labelWidget != null && label != null) {
+			if (labelWidget?.Visible == true && label != null) {
 				if (visualStyle.UppercaseTitles.Value)
 					labelWidget.Text = label.ToUpper ();
 				else
@@ -150,7 +164,8 @@ namespace MonoDevelop.Components.Docking
 				tabIcon.Image = tabIcon.Image.WithAlpha (active ? 1.0 : inactiveIconAlpha);
 				tabIcon.Visible = visualStyle.ShowPadTitleIcon.Value;
 			}
-			if (IsRealized && labelWidget != null) {
+
+			if (IsRealized && labelWidget?.Visible == true) {
 				var font = FontService.SansFont.CopyModified (null, Pango.Weight.Bold);
 				font.AbsoluteSize = Pango.Units.FromPixels (11);
 				labelWidget.ModifyFont (font);
@@ -168,68 +183,93 @@ namespace MonoDevelop.Components.Docking
 
 		public void SetLabel (Gtk.Widget page, Xwt.Drawing.Image icon, string label)
 		{
+			string labelNoSpaces = label != null ? label.Replace (' ', '-') : null;
 			this.label = label;
 			this.page = page;
-			if (Child != null) {
-				Gtk.Widget oc = Child;
-				Remove (oc);
-				oc.Destroy ();
-			}
-			
-			Gtk.HBox box = new HBox ();
-			box.Spacing = -2;
-			
+
 			if (icon == null)
 				icon = ImageService.GetIcon ("md-empty");
 
-			tabIcon = new ImageView (icon);
-			tabIcon.Show ();
-			box.PackStart (tabIcon, false, false, 3);
+			if (box == null) {
+				box = new HBox ();
+				box.Accessible.SetShouldIgnore (true);
+				box.Spacing = -2;
 
-			if (!string.IsNullOrEmpty (label)) {
+				tabIcon = new ImageView ();
+				tabIcon.Accessible.SetShouldIgnore (true);
+				tabIcon.Show ();
+				box.PackStart (tabIcon, false, false, 3);
+
 				labelWidget = new ExtendedLabel (label);
+				// Ignore the label because the title tab already contains its name
+				labelWidget.Accessible.SetShouldIgnore (true);
 				labelWidget.UseMarkup = true;
-				labelWidget.Name = label;
 				var alignLabel = new Alignment (0.0f, 0.5f, 1, 1);
+				alignLabel.Accessible.SetShouldIgnore (true);
 				alignLabel.BottomPadding = 0;
 				alignLabel.RightPadding = 15;
 				alignLabel.Add (labelWidget);
 				box.PackStart (alignLabel, false, false, 0);
-			} else {
-				labelWidget = null;
+
+				btnDock = new ImageButton ();
+				btnDock.Image = pixAutoHide;
+				btnDock.TooltipText = GettextCatalog.GetString ("Auto Hide");
+				btnDock.CanFocus = true;
+				//			btnDock.WidthRequest = btnDock.HeightRequest = 17;
+				btnDock.Clicked += OnClickDock;
+				btnDock.ButtonPressEvent += (o, args) => args.RetVal = true;
+				btnDock.WidthRequest = btnDock.SizeRequest ().Width;
+				UpdateDockButtonAccessibilityLabels ();
+
+				btnClose = new ImageButton ();
+				btnClose.Image = pixClose;
+				btnClose.TooltipText = GettextCatalog.GetString ("Close");
+				btnClose.CanFocus = true;
+				//			btnClose.WidthRequest = btnClose.HeightRequest = 17;
+				btnClose.WidthRequest = btnDock.SizeRequest ().Width;
+				btnClose.Clicked += delegate {
+					item.Visible = false;
+				};
+				btnClose.ButtonPressEvent += (o, args) => args.RetVal = true;
+
+				al = new Alignment (0, 0.5f, 1, 1);
+				al.Accessible.SetShouldIgnore (true);
+				HBox btnBox = new HBox (false, 0);
+				btnBox.Accessible.SetShouldIgnore (true);
+				btnBox.PackStart (btnDock, false, false, 3);
+				btnBox.PackStart (btnClose, false, false, 1);
+				al.Add (btnBox);
+				box.PackEnd (al, false, false, 3);
+
+				Add (box);
 			}
 
-			btnDock = new ImageButton ();
-			btnDock.Image = pixAutoHide;
-			btnDock.TooltipText = GettextCatalog.GetString ("Auto Hide");
-			btnDock.CanFocus = false;
-//			btnDock.WidthRequest = btnDock.HeightRequest = 17;
-			btnDock.Clicked += OnClickDock;
-			btnDock.ButtonPressEvent += (o, args) => args.RetVal = true;
-			btnDock.WidthRequest = btnDock.SizeRequest ().Width;
-			btnDock.Name = string.Format("btnDock_{0}", label ?? string.Empty);
+			tabIcon.Image = icon;
 
-			btnClose = new ImageButton ();
-			btnClose.Image = pixClose;
-			btnClose.TooltipText = GettextCatalog.GetString ("Close");
-			btnClose.CanFocus = false;
-//			btnClose.WidthRequest = btnClose.HeightRequest = 17;
-			btnClose.WidthRequest = btnDock.SizeRequest ().Width;
-			btnClose.Clicked += delegate {
-				item.Visible = false;
-			};
-			btnClose.ButtonPressEvent += (o, args) => args.RetVal = true;
-			btnClose.Name = string.Format ("btnClose_{0}", label ?? string.Empty);
+			string realLabel, realHelp;
+			if (!string.IsNullOrEmpty (label)) {
+				labelWidget.Parent.Show ();
+				labelWidget.Name = label;
+				btnDock.Name = string.Format ("btnDock_{0}", labelNoSpaces ?? string.Empty);
+				btnClose.Name = string.Format ("btnClose_{0}", labelNoSpaces ?? string.Empty);
+				realLabel = GettextCatalog.GetString ("Close {0}", label);
+				realHelp = GettextCatalog.GetString ("Close the {0} pad", label);
+			} else {
+				labelWidget.Parent.Hide ();
+				realLabel = GettextCatalog.GetString ("Close pad");
+				realHelp = GettextCatalog.GetString ("Close the pad");
+			}
 
-			Gtk.Alignment al = new Alignment (0, 0.5f, 1, 1);
-			HBox btnBox = new HBox (false, 0);
-			btnBox.PackStart (btnDock, false, false, 3);
-			btnBox.PackStart (btnClose, false, false, 1);
-			al.Add (btnBox);
-			box.PackEnd (al, false, false, 3);
+			btnClose.Accessible.SetLabel (realLabel);
+			btnClose.Accessible.Description = realHelp;
 
-			Add (box);
-			
+			if (label != null) {
+				Accessible.Name = $"DockTab.{labelNoSpaces}";
+				Accessible.Description = GettextCatalog.GetString ("Switch to the {0} tab", label);
+				Accessible.SetTitle (label);
+				Accessible.SetLabel (label);
+			}
+
 			// Get the required size before setting the ellipsize property, since ellipsized labels
 			// have a width request of 0
 			box.ShowAll ();
@@ -240,7 +280,34 @@ namespace MonoDevelop.Components.Docking
 			UpdateBehavior ();
 			UpdateVisualStyle ();
 		}
-		
+
+		void UpdateDockButtonAccessibilityLabels ()
+		{
+			string realLabel;
+			string realHelp;
+			bool dockable = item.Status != DockItemStatus.Dockable;
+
+			if (string.IsNullOrEmpty (label)) {
+				if (dockable) {
+					realLabel = GettextCatalog.GetString ("Dock pad");
+					realHelp = GettextCatalog.GetString ("Dock the pad into the UI so it will not hide automatically");
+				} else {
+					realLabel = GettextCatalog.GetString ("Autohide pad");
+					realHelp = GettextCatalog.GetString ("Automatically hide the pad when it loses focus");
+				}
+			} else {
+				if (dockable) {
+					realLabel = GettextCatalog.GetString ("Dock {0}", label);
+					realHelp = GettextCatalog.GetString ("Dock the {0} pad into the UI so it will not hide automatically", label);
+				} else {
+					realLabel = GettextCatalog.GetString ("Autohide {0}", label);
+					realHelp = GettextCatalog.GetString ("Automatically hide the {0} pad when it loses focus", label);
+				}
+			}
+			btnDock.Accessible.SetLabel (realLabel);
+			btnDock.Accessible.Description = realHelp;
+		}
+
 		void OnClickDock (object s, EventArgs a)
 		{
 			if (item.Status == DockItemStatus.AutoHide || item.Status == DockItemStatus.Floating)
@@ -256,7 +323,7 @@ namespace MonoDevelop.Components.Docking
 		public int MinWidth {
 			get { return minWidth; }
 		}
-		
+
 		public bool Active {
 			get {
 				return active;
@@ -277,7 +344,7 @@ namespace MonoDevelop.Components.Docking
 				return page;
 			}
 		}
-		
+
 		public void UpdateBehavior ()
 		{
 			if (btnClose == null)
@@ -285,7 +352,7 @@ namespace MonoDevelop.Components.Docking
 
 			btnClose.Visible = (item.Behavior & DockItemBehavior.CantClose) == 0;
 			btnDock.Visible = (item.Behavior & DockItemBehavior.CantAutoHide) == 0;
-			
+
 			if (active || mouseOver) {
 				if (btnClose.Image == null)
 					btnClose.Image = pixClose;
@@ -300,10 +367,19 @@ namespace MonoDevelop.Components.Docking
 				btnDock.Image = null;
 				btnClose.Image = null;
 			}
+
+			UpdateDockButtonAccessibilityLabels ();
 		}
 
 		bool tabPressed, tabActivated;
 		double pressX, pressY;
+
+		protected override void OnActivate ()
+		{
+			TabPressed?.Invoke (this, EventArgs.Empty);
+
+			base.OnActivate ();
+		}
 
 		protected override bool OnButtonPressEvent (Gdk.EventButton evnt)
 		{
@@ -315,6 +391,7 @@ namespace MonoDevelop.Components.Docking
 					tabPressed = true;
 					pressX = evnt.X;
 					pressY = evnt.Y;
+					TabPressed?.Invoke (this, EventArgs.Empty);
 				} else if (evnt.Type == Gdk.EventType.TwoButtonPress) {
 					tabActivated = true;
 				}
@@ -332,8 +409,7 @@ namespace MonoDevelop.Components.Docking
 					else
 						item.Status = DockItemStatus.AutoHide;
 				}
-			}
-			else if (!evnt.TriggersContextMenu () && evnt.Button == 1) {
+			} else if (!evnt.TriggersContextMenu () && evnt.Button == 1) {
 				frame.DockInPlaceholder (item);
 				frame.HidePlaceholder ();
 				if (GdkWindow != null)
@@ -343,6 +419,33 @@ namespace MonoDevelop.Components.Docking
 			}
 			tabPressed = false;
 			return base.OnButtonReleaseEvent (evnt);
+		}
+
+		protected override bool OnFocusInEvent (Gdk.EventFocus evnt)
+		{
+			mouseOver = true;
+			UpdateBehavior ();
+			return base.OnFocusInEvent (evnt);
+		}
+
+		protected override bool OnFocusOutEvent (Gdk.EventFocus evnt)
+		{
+			if (currentFocus == null) {
+				mouseOver = false;
+				UpdateBehavior ();
+			}
+			return base.OnFocusOutEvent (evnt);
+		}
+
+		void HandlePress (object sender, EventArgs args)
+		{
+			TabPressed?.Invoke (this, EventArgs.Empty);
+		}
+
+		void HandleShowMenu (object sender, EventArgs args)
+		{
+			// Show the menu at the middle of the widget
+			item.ShowDockPopupMenu (this, Allocation.Width / 2, Allocation.Height / 2);
 		}
 
 		protected override bool OnMotionNotifyEvent (Gdk.EventMotion evnt)
@@ -370,6 +473,164 @@ namespace MonoDevelop.Components.Docking
 		{
 			mouseOver = false;
 			UpdateBehavior ();
+		}
+
+		enum FocusWidget
+		{
+			None,
+			Widget,
+			DockButton,
+			CloseButton
+		};
+
+		bool FocusCurrentWidget (DirectionType direction)
+		{
+			if (currentFocus == null) {
+				return false;
+			}
+
+			return currentFocus.ChildFocus (direction);
+		}
+
+		bool MoveFocusToWidget (FocusWidget widget, DirectionType direction)
+		{
+			switch (widget) {
+			case FocusWidget.Widget:
+				GrabFocus ();
+				currentFocus = null;
+				return true;
+
+			case FocusWidget.DockButton:
+				currentFocus = btnDock;
+				return btnDock.ChildFocus (direction);
+
+			case FocusWidget.CloseButton:
+				currentFocus = btnClose;
+				return btnClose.ChildFocus (direction);
+
+			case FocusWidget.None:
+				break;
+			}
+
+			return false;
+		}
+
+		FocusWidget GetNextWidgetToFocus (FocusWidget widget, DirectionType direction)
+		{
+			FocusWidget nextSite;
+
+			switch (widget) {
+			case FocusWidget.CloseButton:
+				switch (direction) {
+				case DirectionType.TabForward:
+				case DirectionType.Right:
+				case DirectionType.Down:
+					return FocusWidget.None;
+
+				case DirectionType.TabBackward:
+				case DirectionType.Left:
+				case DirectionType.Up:
+					if (btnDock.Image != null) {
+						nextSite = FocusWidget.DockButton;
+					} else {
+						nextSite = FocusWidget.Widget;
+					}
+					return nextSite;
+				}
+
+				break;
+
+			case FocusWidget.DockButton:
+				switch (direction) {
+				case DirectionType.TabForward:
+				case DirectionType.Right:
+				case DirectionType.Down:
+					return btnClose.Image == null ? FocusWidget.None : FocusWidget.CloseButton;
+
+				case DirectionType.TabBackward:
+				case DirectionType.Left:
+				case DirectionType.Up:
+					return FocusWidget.Widget;
+				}
+
+				break;
+
+			case FocusWidget.Widget:
+				switch (direction) {
+				case DirectionType.TabForward:
+				case DirectionType.Right:
+				case DirectionType.Down:
+					if (btnDock.Image != null) {
+						nextSite = FocusWidget.DockButton;
+					} else if (btnClose.Image != null) {
+						nextSite = FocusWidget.CloseButton;
+					} else {
+						nextSite = FocusWidget.None;
+					}
+					return nextSite;
+
+				case DirectionType.TabBackward:
+				case DirectionType.Left:
+				case DirectionType.Up:
+					return FocusWidget.None;
+				}
+
+				break;
+			case FocusWidget.None:
+				switch (direction) {
+				case DirectionType.TabForward:
+				case DirectionType.Right:
+				case DirectionType.Down:
+					return FocusWidget.Widget;
+
+				case DirectionType.TabBackward:
+				case DirectionType.Left:
+				case DirectionType.Up:
+					if (btnClose.Image != null) {
+						nextSite = FocusWidget.CloseButton;
+					} else if (btnDock.Image != null) {
+						nextSite = FocusWidget.DockButton;
+					} else {
+						nextSite = FocusWidget.Widget;
+					}
+					return nextSite;
+				}
+
+				break;
+			}
+
+			return FocusWidget.None;
+		}
+
+		protected override bool OnFocused (DirectionType direction)
+		{
+			if (!FocusCurrentWidget (direction)) {
+				FocusWidget focus = FocusWidget.None;
+
+				if (currentFocus == btnClose) {
+					focus = FocusWidget.CloseButton;
+				} else if (currentFocus == btnDock) {
+					focus = FocusWidget.DockButton;
+				} else if (IsFocus) {
+					focus = FocusWidget.Widget;
+				}
+
+				while ((focus = GetNextWidgetToFocus (focus, direction)) != FocusWidget.None) {
+					if (MoveFocusToWidget (focus, direction)) {
+						return true;
+					}
+				}
+
+				// Clean up the icons because OnFocusOutEvent has already been called
+				// so we need the icons to hide again
+				mouseOver = false;
+				UpdateBehavior ();
+
+				currentFocus = null;
+				return false;
+			}
+
+			return true;
 		}
 
 		[GLib.ConnectBeforeAttribute]
@@ -444,6 +705,12 @@ namespace MonoDevelop.Components.Docking
 				DrawAsBrowser (evnt);
 			else
 				DrawNormal (evnt);
+
+			if (HasFocus) {
+				var alloc = labelWidget.Allocation;
+				Gtk.Style.PaintFocus (Style, GdkWindow, State, alloc, this, "label",
+				                      alloc.X, alloc.Y, alloc.Width, alloc.Height);
+			}
 			return base.OnExposeEvent (evnt);
 		}
 

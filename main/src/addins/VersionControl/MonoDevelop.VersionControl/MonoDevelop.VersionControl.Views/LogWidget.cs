@@ -34,6 +34,7 @@ using System.Threading;
 using MonoDevelop.Components;
 using Mono.TextEditor;
 using System.Linq;
+using MonoDevelop.Ide.Editor;
 using MonoDevelop.Ide.Fonts;
 
 namespace MonoDevelop.VersionControl.Views
@@ -373,7 +374,7 @@ namespace MonoDevelop.VersionControl.Views
 						diffView.ComparisonWidget.SetRevision (diffView.ComparisonWidget.OriginalEditor, SelectedRevision.GetPrevious ());
 						diffView.ComparisonWidget.SetRevision (diffView.ComparisonWidget.DiffEditor, SelectedRevision);
 						
-						diffView.ComparisonWidget.DiffEditor.Caret.Location = new Mono.TextEditor.DocumentLocation (line, 1);
+						diffView.ComparisonWidget.DiffEditor.Caret.Location = new DocumentLocation (line, 1);
 						diffView.ComparisonWidget.DiffEditor.CenterToCaret ();
 					});
 					break;
@@ -403,7 +404,7 @@ namespace MonoDevelop.VersionControl.Views
 					try {
 						text = info.Repository.GetTextAtRevision (path, rev);
 					} catch (Exception e) {
-						Application.Invoke (delegate {
+						Application.Invoke ((o2, a2) => {
 							LoggingService.LogError ("Error while getting revision text", e);
 							MessageService.ShowError (
 								GettextCatalog.GetString ("Error while getting revision text."),
@@ -416,7 +417,7 @@ namespace MonoDevelop.VersionControl.Views
 					try {
 						prevRev = rev.GetPrevious ();
 					} catch (Exception e) {
-						Application.Invoke (delegate {
+						Application.Invoke ((o2, a2) => {
 							MessageService.ShowError (GettextCatalog.GetString ("Error while getting previous revision."), e);
 						});
 						return;
@@ -437,7 +438,7 @@ namespace MonoDevelop.VersionControl.Views
 							try {
 								prevRevisionText = info.Repository.GetTextAtRevision (path, prevRev);
 							} catch (Exception e) {
-								Application.Invoke (delegate {
+								Application.Invoke ((o2, a2) => {
 									LoggingService.LogError ("Error while getting revision text", e);
 									MessageService.ShowError (
 										GettextCatalog.GetString ("Error while getting revision text."),
@@ -462,7 +463,7 @@ namespace MonoDevelop.VersionControl.Views
 							lines = Mono.TextEditor.Utils.Diff.GetDiffString (originalDocument, changedDocument).Split ('\n');
 						}
 					}
-					Application.Invoke (delegate {
+					Application.Invoke ((o2, a2) => {
 						changedpathstore.SetValue (iter, colDiff, lines);
 					});
 				});
@@ -558,7 +559,7 @@ namespace MonoDevelop.VersionControl.Views
 			if (string.IsNullOrEmpty (rev.Message)) {
 				renderer.Text = GettextCatalog.GetString ("(No message)");
 			} else {
-				string message = Revision.FormatMessage (rev.Message);
+				string message = RevisionHelpers.FormatMessage (rev.Message);
 				int idx = message.IndexOf ('\n');
 				if (idx > 0)
 					message = message.Substring (0, idx);
@@ -772,7 +773,7 @@ namespace MonoDevelop.VersionControl.Views
 			int last = 0;
 			while (i != -1) {
 				sb.Append (GLib.Markup.EscapeText (txt.Substring (last, i - last)));
-				sb.Append ("<span color='" + Styles.LogView.SearchSnippetTextColor + "'>").Append (txt, i, filter.Length).Append ("</span>");
+				sb.Append ("<span color='").Append (Styles.LogView.SearchSnippetTextColor).Append ("'>").Append (txt, i, filter.Length).Append ("</span>");
 				last = i + filter.Length;
 				i = txt.IndexOf (filter, last, StringComparison.CurrentCultureIgnoreCase);
 			}

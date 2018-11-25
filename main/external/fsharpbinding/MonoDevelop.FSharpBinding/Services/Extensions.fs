@@ -2,9 +2,11 @@
 open System
 open System.Text
 open System.IO
+open System.Threading.Tasks
 open Microsoft.FSharp.Compiler.SourceCodeServices
 open MonoDevelop.Core
 open ExtCore
+open System.Reactive.Linq
 
 module Seq =
     let tryHead items =
@@ -135,10 +137,6 @@ module FSharpSymbolExt =
             if name.StartsWith "( " && name.EndsWith " )" && name.Length > 4
             then name.Substring (2, name.Length - 4) |> String.forall (fun c -> c <> ' ')
             else false
-        member x.EnclosingEntitySafe =
-            try
-                Some x.EnclosingEntity
-            with :? InvalidOperationException -> None
 
     type FSharpEntity with
         member x.TryGetFullName() =
@@ -156,7 +154,7 @@ module FSharpSymbolExt =
 
         member x.UnAnnotate() =
             let rec realEntity (s:FSharpEntity) =
-                if s.IsFSharpAbbreviation
+                if s.IsFSharpAbbreviation && s.AbbreviatedType.HasTypeDefinition
                 then realEntity s.AbbreviatedType.TypeDefinition
                 else s
             realEntity x
@@ -238,10 +236,6 @@ module AsyncChoiceCE =
                 | Success x -> return! binder x
             }
 
-module Async =
-    let inline startAsPlainTask (work : Async<unit>) =
-        System.Threading.Tasks.Task.Factory.StartNew(fun () -> work |> Async.RunSynchronously)
-
 module LoggingService =
     let inline private log f = Printf.kprintf f
     //let logDebug format = log (log LoggingService.LogDebug "[F# Addin] %s") format
@@ -249,3 +243,24 @@ module LoggingService =
     let logError format = log LoggingService.LogError format
     let logInfo format = log LoggingService.LogInfo format
     let logWarning format = log LoggingService.LogWarning format
+
+module Async =
+    let inline startAsPlainTask (work : Async<unit>) =
+        System.Threading.Tasks.Task.Factory.StartNew(fun () -> work |> Async.RunSynchronously)
+
+    let inline awaitPlainTask (task: Task) = 
+        task.ContinueWith (fun task -> if task.IsFaulted then raise task.Exception)
+        |> Async.AwaitTask
+
+[<AutoOpen>]
+module AsyncTaskBind =
+    type Microsoft.FSharp.Control.AsyncBuilder with
+        member x.Bind(computation:Task<'T>, binder:'T -> Async<'R>) =  x.Bind(Async.AwaitTask computation, binder)
+        member x.ReturnFrom(computation:Task<'T>) = x.ReturnFrom(Async.AwaitTask computation)
+        member x.Bind(computation:Task, binder:unit -> Async<unit>) =  x.Bind(Async.awaitPlainTask computation, binder)
+        member x.ReturnFrom(computation:Task) = x.ReturnFrom(Async.awaitPlainTask computation)
+
+module Observable =
+    let throttle (due:TimeSpan) observable =
+        Observable.Throttle(observable, due)
+

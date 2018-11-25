@@ -43,6 +43,7 @@ namespace MonoDevelop.PackageManagement
 		static readonly PackageManagementCredentialService credentialService;
 		static readonly AnalyzerPackageMonitor analyzerPackageMonitor;
 		static readonly MonoDevelopHttpUserAgent userAgent = new MonoDevelopHttpUserAgent ();
+		static readonly NuGetConfigFileChangedMonitor nuGetConfigFileChangedMonitor = new NuGetConfigFileChangedMonitor ();
 
 		static PackageManagementServices()
 		{
@@ -66,7 +67,10 @@ namespace MonoDevelop.PackageManagement
 
 			PackageManagementBackgroundDispatcher.Initialize ();
 
+			nuGetConfigFileChangedMonitor.MonitorFileChanges ();
+
 			//analyzerPackageMonitor = new AnalyzerPackageMonitor ();
+			MonoDevelop.Refactoring.PackageInstaller.PackageInstallerServiceFactory.PackageServices = new MonoDevelop.PackageManagement.Refactoring.NuGetPackageServicesProxy ();
 		}
 
 		internal static void InitializeCredentialService ()

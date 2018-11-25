@@ -26,11 +26,13 @@
 // WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //
 
-using NuGet;
+using System.Threading.Tasks;
+using NuGet.Common;
+using NuGet.ProjectManagement;
 
 namespace MonoDevelop.PackageManagement
 {
-	internal class PackageManagementLogger : NuGet.ILogger, NuGet.Common.ILogger
+	internal class PackageManagementLogger : ILogger
 	{
 		IPackageManagementEvents packageManagementEvents;
 		
@@ -42,11 +44,6 @@ namespace MonoDevelop.PackageManagement
 		public void Log(MessageLevel level, string message, params object[] args)
 		{
 			packageManagementEvents.OnPackageOperationMessageLogged(level, message, args);
-		}
-		
-		public FileConflictResolution ResolveFileConflict(string message)
-		{
-			return FileConflictResolution.Ignore;
 		}
 
 		public void LogDebug (string data)
@@ -87,6 +84,52 @@ namespace MonoDevelop.PackageManagement
 		public void LogErrorSummary (string data)
 		{
 			LogDebug (data);
+		}
+
+		public void Log (ILogMessage message)
+		{
+			Log (message.Level, message.Message);
+		}
+
+		public Task LogAsync (LogLevel level, string data)
+		{
+			Log (level, data);
+			return Task.FromResult (true);
+		}
+
+		public Task LogAsync (ILogMessage message)
+		{
+			Log (message);
+			return Task.FromResult (true);
+		}
+
+		public void Log (LogLevel level, string data)
+		{
+			switch (level) {
+			case LogLevel.Debug:
+				LogDebug (data);
+				break;
+
+			case LogLevel.Error:
+				LogError(data);
+				break;
+
+			case LogLevel.Information:
+				LogInformation (data);
+				break;
+
+			case LogLevel.Minimal:
+				LogMinimal (data);
+				break;
+
+			case LogLevel.Verbose:
+				LogVerbose (data);
+				break;
+
+			case LogLevel.Warning:
+				LogWarning (data);
+				break;
+			}
 		}
 	}
 }

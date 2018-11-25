@@ -335,7 +335,13 @@ namespace MonoDevelop.Ide
 					PlaceDialog (dialog, parent);
 			}).Wait ();
 			#endif
-			return GtkWorkarounds.RunDialogWithNotification (dialog);
+
+			try {
+				IdeApp.DisableIdleActions ();
+				return GtkWorkarounds.RunDialogWithNotification (dialog);
+			} finally {
+				IdeApp.EnableIdleActions ();
+			}
 		}
 
 		#if MAC
@@ -370,7 +376,11 @@ namespace MonoDevelop.Ide
 
 		static Gtk.Window GetFocusedToplevel ()
 		{
-			return Gtk.Window.ListToplevels ().FirstOrDefault (w => w.HasToplevelFocus) ?? RootWindow;
+			// use the first "normal" toplevel window (skipping docks, popups, etc.) or the main IDE window
+			return Gtk.Window.ListToplevels ().FirstOrDefault (w => w.HasToplevelFocus &&
+			                                                   (w.TypeHint == Gdk.WindowTypeHint.Dialog ||
+			                                                    w.TypeHint == Gdk.WindowTypeHint.Normal ||
+			                                                    w.TypeHint == Gdk.WindowTypeHint.Utility)) ?? RootWindow;
 		}
 		
 		/// <summary>
@@ -473,7 +483,7 @@ namespace MonoDevelop.Ide
 				return task.Result;
 			//cancelDialog is used to close dialog when task is finished
 			var cancelDialog = new CancellationTokenSource ();
-			Gtk.Application.Invoke (delegate {
+			Gtk.Application.Invoke ((o, args) => {
 				if (cancelDialog.Token.IsCancellationRequested)
 					return;
 				var gm = new GenericMessage (waitMessage, null, cancelDialog.Token);

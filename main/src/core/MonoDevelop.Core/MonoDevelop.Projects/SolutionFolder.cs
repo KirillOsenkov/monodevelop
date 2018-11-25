@@ -38,7 +38,7 @@ using MonoDevelop.Projects;
 using MonoDevelop.Projects.Extensions;
 using MonoDevelop.Core.Serialization;
 using System.Threading.Tasks;
-using System.Collections.Immutable;
+using MonoDevelop.Projects.MSBuild;
 
 namespace MonoDevelop.Projects
 {
@@ -51,6 +51,7 @@ namespace MonoDevelop.Projects
 		
 		public SolutionFolder ()
 		{
+			Initialize (this);
 		}
 		
 		public SolutionFolderItemCollection Items {
@@ -218,7 +219,7 @@ namespace MonoDevelop.Projects
 				try {
 					if (ParentSolution.IsSolutionItemEnabled (item.FileName)) {
 						using (var ctx = new SolutionLoadContext (ParentSolution))
-							newItem = await Services.ProjectService.ReadSolutionItem (monitor, item.FileName, null, ctx: ctx);
+							newItem = await Services.ProjectService.ReadSolutionItem (monitor, item.FileName, null, ctx: ctx, itemGuid: item.ItemId);
 					}
 					else {
 						UnknownSolutionItem e = new UnloadedSolutionItem () {
@@ -294,6 +295,7 @@ namespace MonoDevelop.Projects
 				folder.FileRenamedInProject += NotifyFileRenamedInProject;
 				folder.ReferenceRemovedFromProject += NotifyReferenceRemovedFromProject;
 				folder.ReferenceAddedToProject += NotifyReferenceAddedToProject;
+				folder.ItemSaved += NotifyItemSaved;
 			}
 			
 			if (item is SolutionItem) {
@@ -380,6 +382,7 @@ namespace MonoDevelop.Projects
 				cce.FileRenamedInProject -= NotifyFileRenamedInProject;
 				cce.ReferenceRemovedFromProject -= NotifyReferenceRemovedFromProject;
 				cce.ReferenceAddedToProject -= NotifyReferenceAddedToProject;
+				cce.ItemSaved -= NotifyItemSaved;
 			}
 			
 			if (entry is SolutionItem) {
@@ -577,10 +580,13 @@ namespace MonoDevelop.Projects
 		public async Task<BuildResult> Clean (ProgressMonitor monitor, ConfigurationSelector configuration, OperationContext operationContext = null)
 		{
 			if (ParentSolution == null)
-				return new BuildResult ();
+				return new BuildResult();
 			SolutionConfiguration conf = ParentSolution.GetConfiguration (configuration);
 			if (conf == null)
-				return new BuildResult ();
+				return new BuildResult();
+
+			if (operationContext == null)
+				operationContext = new OperationContext ();
 
 			ReadOnlyCollection<SolutionItem> allProjects;
 			try {
@@ -591,12 +597,20 @@ namespace MonoDevelop.Projects
 			}
 
 			monitor.BeginTask (GettextCatalog.GetString ("Cleaning Solution: {0} ({1})", Name, configuration.ToString ()), allProjects.Count);
+
+			bool operationStarted = false;
+			BuildResult result = null;
+
 			try {
-				return await RunParallelBuildOperation (monitor, configuration, allProjects, (ProgressMonitor m, SolutionItem item) => {
+				operationStarted = ParentSolution != null && await ParentSolution.BeginBuildOperation (monitor, configuration, operationContext);
+
+				return result = await RunParallelBuildOperation (monitor, configuration, allProjects, (ProgressMonitor m, SolutionItem item) => {
 					return item.Clean (m, configuration, operationContext);
 				}, false);
 			}
 			finally {
+				if (operationStarted)
+					await ParentSolution.EndBuildOperation (monitor, configuration, operationContext, result);
 				monitor.EndTask ();
 			}
 		}
@@ -619,15 +633,25 @@ namespace MonoDevelop.Projects
 				return new BuildResult ("", 1, 1);
 			}
 
+			if (operationContext == null)
+				operationContext = new OperationContext ();
+
+			bool operationStarted = false;
+			BuildResult result = null;
+
 			try {
 				
 				monitor.BeginTask (GettextCatalog.GetString ("Building Solution: {0} ({1})", Name, configuration.ToString ()), allProjects.Count);
 
-				return await RunParallelBuildOperation (monitor, configuration, allProjects, (ProgressMonitor m, SolutionItem item) => {
+				operationStarted = ParentSolution != null && await ParentSolution.BeginBuildOperation (monitor, configuration, operationContext);
+
+				return result = await RunParallelBuildOperation (monitor, configuration, allProjects, (ProgressMonitor m, SolutionItem item) => {
 					return item.Build (m, configuration, false, operationContext);
 				}, false);
 
 			} finally {
+				if (operationStarted)
+					await ParentSolution.EndBuildOperation (monitor, configuration, operationContext, result);
 				monitor.EndTask ();
 			}
         }
@@ -644,9 +668,9 @@ namespace MonoDevelop.Projects
 
 			// Create a dictionary with the status objects of all items
 
-			var buildStatus = ImmutableDictionary<SolutionItem, BuildStatus>.Empty;
+			var buildStatus = new Dictionary<SolutionItem, BuildStatus> ();
 			foreach (var it in toBuild)
-				buildStatus = buildStatus.Add (it, new BuildStatus ());
+				buildStatus.Add (it, new BuildStatus ());
 
 			// Start the build tasks for all itemsw
 
@@ -702,6 +726,7 @@ namespace MonoDevelop.Projects
 			return cres;
 		}
 
+		[Obsolete("This method will be removed in future releases")]
 		public bool NeedsBuilding (ConfigurationSelector configuration)
 		{
 			return Items.OfType<IBuildTarget>().Any (t => t.NeedsBuilding (configuration));
@@ -835,7 +860,7 @@ namespace MonoDevelop.Projects
 			OnItemModified (e);
 		}
 		
-		internal void NotifyItemSaved (object sender, SolutionItemEventArgs e)
+		internal void NotifyItemSaved (object sender, SolutionItemSavedEventArgs e)
 		{
 			OnItemSaved (e);
 		}
@@ -976,7 +1001,7 @@ namespace MonoDevelop.Projects
 				ItemModified (this, e);
 		}
 		
-		void OnItemSaved (SolutionItemEventArgs e)
+		void OnItemSaved (SolutionItemSavedEventArgs e)
 		{
 			if (ParentFolder == null && ParentSolution != null)
 				ParentSolution.OnEntrySaved (e);
@@ -1017,7 +1042,7 @@ namespace MonoDevelop.Projects
 		public event ProjectReferenceEventHandler ReferenceAddedToProject;
 		public event ProjectReferenceEventHandler ReferenceRemovedFromProject;
 		public event SolutionItemModifiedEventHandler ItemModified;
-		public event SolutionItemEventHandler ItemSaved;
+		public event SolutionItemSavedEventHandler ItemSaved;
 		public event EventHandler<SolutionItemFileEventArgs> SolutionItemFileAdded;
 		public event EventHandler<SolutionItemFileEventArgs> SolutionItemFileRemoved;
 //		public event EventHandler<SolutionItemEventArgs> ItemReloadRequired;

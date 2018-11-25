@@ -1,4 +1,4 @@
-<?xml version="1.0"?>
+﻿<?xml version="1.0"?>
 <Template Originator="Community" Created="10/6/2010" LastModified="10/6/2010">
 
   <!-- Template Header -->
@@ -31,24 +31,24 @@
         <Reference type="Package" refto="System.Core, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089" />
         <Reference type="Package" refto="System.Numerics, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089" />	
       </References>
-      <Packages>
-        <Package Id="FSharp.Core" Version="4.0.0.1" local="true" /> 
+      <Packages requireLicenseAcceptance="false">
+        <Package Id="FSharp.Core" Version="4.1.0.2" local="true" /> 
       </Packages>
       <Files>
         <FileTemplateReference TemplateID="FSharpAssemblyInfo" name="AssemblyInfo.fs" />
-        <UnformattedFile name = "Component1.fs" AddStandardHeader="True">
+        <File name = "Component1.fs" AddStandardHeader="True">
         <![CDATA[namespace ${Namespace}
 
 type Class1() = 
     member this.X = "F#"
-]]></UnformattedFile>
-	<UnformattedFile name = "Script.fsx" AddStandardHeader="True">
-	<![CDATA[// Learn more about F# at http://fsharp.net. See the 'F# Tutorial' project
+]]></File>
+	<File name = "Script.fsx" AddStandardHeader="True">
+	<![CDATA[// Learn more about F# at http://fsharp.org. See the 'F# Tutorial' project
 // for more guidance on F# programming.
 
 #load "Component1.fs"
 open ${Namespace}
-]]></UnformattedFile>
+]]></File>
       </Files>
     </Project>
   </Combine>

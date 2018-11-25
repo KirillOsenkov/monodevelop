@@ -284,12 +284,17 @@ namespace MonoDevelop.Projects
 
 			if (!startupConfigSet) {
 				// Startup configuration has not been set by legacy properties. Do it now.
-				var sconfig = UserProperties.GetValue<string> ("StartupConfiguration");
-				if (!string.IsNullOrEmpty (sconfig))
-					StartupConfiguration = GetRunConfigurations ().FirstOrDefault (c => c.Id == sconfig);
-				else
-					StartupConfiguration = GetRunConfigurations ().FirstOrDefault ();
+				RefreshStartupConfiguration ();
 			}
+		}
+
+		internal void RefreshStartupConfiguration ()
+		{
+			var sconfig = UserProperties.GetValue<string> ("StartupConfiguration");
+			if (!string.IsNullOrEmpty (sconfig))
+				StartupConfiguration = GetRunConfigurations ().FirstOrDefault (c => c.Id == sconfig);
+			else
+				StartupConfiguration = GetRunConfigurations ().FirstOrDefault ();
 		}
 
 		internal protected override Task OnSave (ProgressMonitor monitor)
@@ -650,14 +655,14 @@ namespace MonoDevelop.Projects
 			return Clean (monitor, (SolutionConfigurationSelector) configuration);
 		}
 
-		public async Task<BuildResult> Clean (ProgressMonitor monitor, ConfigurationSelector configuration, OperationContext operationContext = null)
+		public Task<BuildResult> Clean (ProgressMonitor monitor, ConfigurationSelector configuration, OperationContext operationContext = null)
 		{
-			return await SolutionExtension.Clean (monitor, configuration, operationContext);
+			return SolutionExtension.Clean (monitor, configuration, operationContext);
 		}
 
-		public async Task<BuildResult> Build (ProgressMonitor monitor, string configuration, OperationContext operationContext = null)
+		public Task<BuildResult> Build (ProgressMonitor monitor, string configuration, OperationContext operationContext = null)
 		{
-			return await SolutionExtension.Build (monitor, (SolutionConfigurationSelector) configuration, operationContext);
+			return SolutionExtension.Build (monitor, (SolutionConfigurationSelector) configuration, operationContext);
 		}
 
 		Task<BuildResult> IBuildTarget.Build (ProgressMonitor monitor, ConfigurationSelector configuration, bool buildReferencedTargets, OperationContext operationContext)
@@ -665,11 +670,12 @@ namespace MonoDevelop.Projects
 			return Build (monitor, configuration, operationContext);
 		}
 
-		public async Task<BuildResult> Build (ProgressMonitor monitor, ConfigurationSelector configuration, OperationContext operationContext = null)
+		public Task<BuildResult> Build (ProgressMonitor monitor, ConfigurationSelector configuration, OperationContext operationContext = null)
 		{
-			return await SolutionExtension.Build (monitor, configuration, operationContext);
+			return SolutionExtension.Build (monitor, configuration, operationContext);
 		}
 
+		[Obsolete("This method will be removed in future releases")]
 		public bool NeedsBuilding (ConfigurationSelector configuration)
 		{
 			return SolutionExtension.NeedsBuilding (configuration);
@@ -801,12 +807,44 @@ namespace MonoDevelop.Projects
 			return SolutionExtension.GetExecutionTargets (this, configuration);
 		}
 
+		/// <summary>
+		/// To be called when a new build session starts
+		/// </summary>
+		/// <returns>True if the session could be started, False otherwise (such as for example, when there is a session already in progress)</returns>
+		/// <param name="monitor">Monitor.</param>
+		/// <param name="configuration">Build configuration.</param>
+		/// <param name="operationContext">Operation context.</param>
+		internal async Task<bool> BeginBuildOperation (ProgressMonitor monitor, ConfigurationSelector configuration, OperationContext operationContext)
+		{
+			if (operationContext.BatchOperationStarted)
+				return false;
+			operationContext.BatchOperationStarted = true;
+			await SolutionExtension.OnBeginBuildOperation (monitor, configuration, operationContext);
+			return true;
+		}
+
+		/// <summary>
+		/// To be called when the currently active build session ends
+		/// </summary>
+		/// <param name="monitor">Monitor.</param>
+		/// <param name="configuration">Build configuration.</param>
+		/// <param name="operationContext">Operation context.</param>
+		/// <param name="result">Build results.</param>
+		internal Task EndBuildOperation (ProgressMonitor monitor, ConfigurationSelector configuration, OperationContext operationContext, BuildResult result)
+		{
+			if (result == null)
+				result = new BuildResult ().AddError ("Build operation failed");
+			operationContext.BatchOperationStarted = false;
+			return SolutionExtension.OnEndBuildOperation (monitor, configuration, operationContext, result);
+		}
+
 		/*protected virtual*/
 		Task<BuildResult> OnBuild (ProgressMonitor monitor, ConfigurationSelector configuration, OperationContext operationContext)
 		{
 			return RootFolder.Build (monitor, configuration, operationContext:operationContext);
 		}
 
+		[Obsolete("This method will be removed in future releases")]
 		/*protected virtual*/ bool OnGetNeedsBuilding (ConfigurationSelector configuration)
 		{
 			return RootFolder.NeedsBuilding (configuration);
@@ -1181,7 +1219,7 @@ namespace MonoDevelop.Projects
 				EntryModified (this, args);
 		}
 		
-		internal /*protected virtual*/ void OnEntrySaved (SolutionItemEventArgs args)
+		internal /*protected virtual*/ void OnEntrySaved (SolutionItemSavedEventArgs args)
 		{
 			if (EntrySaved != null)
 				EntrySaved (this, args);
@@ -1210,7 +1248,7 @@ namespace MonoDevelop.Projects
 		public event ProjectReferenceEventHandler ReferenceAddedToProject;
 		public event ProjectReferenceEventHandler ReferenceRemovedFromProject;
 		public event SolutionItemModifiedEventHandler EntryModified;
-		public event SolutionItemEventHandler EntrySaved;
+		public event SolutionItemSavedEventHandler EntrySaved;
 		public event EventHandler<SolutionItemEventArgs> ItemReloadRequired;
 
 		protected override IEnumerable<WorkspaceObjectExtension> CreateDefaultExtensions ()
@@ -1230,6 +1268,7 @@ namespace MonoDevelop.Projects
 				return Solution.OnBuild (monitor, configuration, operationContext);
 			}
 
+			[Obsolete("This method will be removed in future releases")]
 			internal protected override bool NeedsBuilding (ConfigurationSelector configuration)
 			{
 				return Solution.OnGetNeedsBuilding (configuration);
@@ -1308,6 +1347,16 @@ namespace MonoDevelop.Projects
 			internal protected override IEnumerable<SolutionRunConfiguration> OnGetRunConfigurations ()
 			{
 				return Solution.OnGetRunConfigurations ();
+			}
+
+			internal protected override Task OnBeginBuildOperation (ProgressMonitor monitor, ConfigurationSelector configuration, OperationContext operationContext)
+			{
+				return Task.CompletedTask;
+			}
+
+			internal protected override Task OnEndBuildOperation (ProgressMonitor monitor, ConfigurationSelector configuration, OperationContext operationContext, BuildResult result)
+			{
+				return Task.CompletedTask;
 			}
 		}
 	}

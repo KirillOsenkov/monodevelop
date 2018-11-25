@@ -58,6 +58,8 @@ namespace MonoDevelop.Ide.Templates
 		string dependsOn;
 		string buildAction;
 		string customTool;
+		string customToolNamespace;
+		string subType;
 		List<string> references = new List<string> ();
 		
 		public override void Load (XmlElement filenode, FilePath baseDirectory)
@@ -68,6 +70,8 @@ namespace MonoDevelop.Ide.Templates
 			defaultExtensionDefined = filenode.Attributes ["DefaultExtension"] != null;
 			dependsOn = filenode.GetAttribute ("DependsOn");
 			customTool = filenode.GetAttribute ("CustomTool");
+			customToolNamespace = filenode.GetAttribute ("CustomToolNamespace");
+			subType = filenode.GetAttribute ("SubType");
 			
 			buildAction = BuildAction.Compile;
 			buildAction = filenode.GetAttribute ("BuildAction");
@@ -129,7 +133,15 @@ namespace MonoDevelop.Ide.Templates
 				
 				if (!string.IsNullOrEmpty (customTool))
 					projectFile.Generator = customTool;
-				
+
+				if (!string.IsNullOrEmpty (customToolNamespace)) {
+					var model = CombinedTagModel.GetTagModel (ProjectTagModel, policyParent, project, language, name, generatedFile);
+					projectFile.CustomToolNamespace = StringParserService.Parse (customToolNamespace, model);
+				}
+
+				if (!string.IsNullOrEmpty (subType))
+					projectFile.ContentType = subType;
+
 				DotNetProject netProject = project as DotNetProject;
 				if (netProject != null) {
 					// Add required references
@@ -303,8 +315,8 @@ namespace MonoDevelop.Ide.Templates
 			var doc = TextEditorFactory.CreateNewDocument ();
 			doc.Text = content;
 			
-			TextStylePolicy textPolicy = policyParent != null ? policyParent.Policies.Get<TextStylePolicy> ("text/plain")
-				: MonoDevelop.Projects.Policies.PolicyService.GetDefaultPolicy<TextStylePolicy> ("text/plain");
+			TextStylePolicy textPolicy = policyParent != null ? policyParent.Policies.Get<TextStylePolicy> (mime ?? "text/plain")
+				: MonoDevelop.Projects.Policies.PolicyService.GetDefaultPolicy<TextStylePolicy> (mime ?? "text/plain");
 			string eolMarker = TextStylePolicy.GetEolMarker (textPolicy.EolMarker);
 			byte[] eolMarkerBytes = System.Text.Encoding.UTF8.GetBytes (eolMarker);
 			

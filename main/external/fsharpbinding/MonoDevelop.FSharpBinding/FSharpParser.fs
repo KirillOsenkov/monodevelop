@@ -1,6 +1,7 @@
 ﻿namespace MonoDevelop.FSharp
 
 open Microsoft.FSharp.Compiler
+open Microsoft.FSharp.Compiler.SourceCodeServices
 open MonoDevelop.Core
 open MonoDevelop.Ide
 open MonoDevelop.Ide.Editor
@@ -24,7 +25,7 @@ module ParsedDocument =
 
     let inline private isMoreThanNLines n (range:Range.range) =
         range.EndLine - range.StartLine > n
-        
+
     let create (parseOptions: ParseOptions) (parseResults: ParseAndCheckResults) defines location =
       //Try creating tokens
         async {
@@ -36,13 +37,14 @@ module ParsedDocument =
 
             //Get all the symboluses now rather than in semantic highlighting
             LoggingService.LogDebug ("FSharpParser: Processing symbol uses on {0}", shortFilename)
-            let errors = parseResults.GetErrors()
+            let errors = parseResults.GetErrors() |> List.ofSeq
             errors
-            |> Seq.groupBy(fun error -> error.ErrorNumber = 1182) //"The value '%s' is unused"
-            |> Seq.iter(function
+            |> List.groupBy(fun error -> error.ErrorNumber = 1182) //"The value '%s' is unused"
+            |> List.iter(function
                         | true, unused ->
-                            doc.UnusedCodeRanges <- Some (unused |> Seq.map formatUnused |> List.ofSeq)
+                            doc.UnusedCodeRanges <- Some (unused |> List.map formatUnused)
                         | false, errors ->
+                            doc.HasErrors <- errors |> List.exists(fun e -> e.Severity = FSharpErrorSeverity.Error)
                             errors |> (Seq.map formatError >> doc.AddRange))
 
             let! allSymbolUses = parseResults.GetAllUsesOfAllSymbolsInFile()
@@ -98,7 +100,7 @@ type FSharpParser() =
                          if file = "" then None else Some file
 
     let isObsolete filename version (token:CancellationToken) =
-        SourceCodeServices.IsResultObsolete(fun () ->
+        (fun () ->
             let shortFilename = Path.GetFileName filename
             try
                 if not token.IsCancellationRequested then
@@ -139,12 +141,12 @@ type FSharpParser() =
                 async {
                     match tryGetFilePath fileName proj with
                     | Some filePath ->
-                        LoggingService.LogDebug ("FSharpParser: Running ParseAndCheckFileInProject for {0}", shortFilename)
+                        LoggingService.logDebug "FSharpParser: Running ParseAndCheckFileInProject for %s" shortFilename
                         let projectFile = proj |> function null -> filePath | proj -> proj.FileName.ToString()
                         let obsolete = isObsolete parseOptions.FileName parseOptions.Content.Version cancellationToken
                         try
                             let! pendingParseResults = Async.StartChild(languageService.ParseAndCheckFileInProject(projectFile, filePath, 0, content.Text, obsolete), ServiceSettings.maximumTimeout)
-                            LoggingService.LogDebug ("FSharpParser: Parse and check results retieved on {0}", shortFilename)
+                            LoggingService.logDebug "FSharpParser: Parse and check results retrieved on %s" shortFilename
                             let defines = CompilerArguments.getDefineSymbols filePath proj
                             let! results = pendingParseResults
                             //if you ever want to see the current parse tree

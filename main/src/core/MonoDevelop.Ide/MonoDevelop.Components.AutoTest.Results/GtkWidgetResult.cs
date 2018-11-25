@@ -137,7 +137,7 @@ namespace MonoDevelop.Components.AutoTest.Results
 					propText = item.Label;
 				}
 
-				if (button != null && button.UseUnderline) {
+				if (button != null && button.UseUnderline && propText != null) {
 					int indexOfUnderline = propText.IndexOf ("_");
 					if (indexOfUnderline > -1) {
 						propText = propText.Remove (indexOfUnderline, 1);
@@ -192,7 +192,13 @@ namespace MonoDevelop.Components.AutoTest.Results
 				AttributeCollection attrs = TypeDescriptor.GetAttributes (model);
 				attr = (SemanticModelAttribute)attrs [typeof(SemanticModelAttribute)];
 				if (attr == null) {
-					return -1;
+					if (column.StartsWith ("column__")) {
+						int columnNum;
+						if (int.TryParse (column.Replace ("column__", string.Empty), out columnNum))
+							return columnNum;
+					}
+					else
+						return -1;
 				}
 			}
 			return Array.IndexOf (attr.ColumnNames, column);
@@ -249,11 +255,19 @@ namespace MonoDevelop.Components.AutoTest.Results
 		public override bool Click ()
 		{
 			Button button = resultWidget as Button;
-			if (button == null) {
-				return false;
+			if (button != null) {
+				button.Click ();
+				return true;
 			}
+			Label lbl = resultWidget as Label;
+			if(lbl != null)
+			{
+				GLib.Signal.Emit (lbl, "activate-link", new object[]{});
+				return true;
+			}
+			GLib.Signal.Emit (resultWidget, "button-press-event", new object [] { });
+			GLib.Signal.Emit (resultWidget, "button-release-event", new object [] { });
 
-			button.Click ();
 			return true;
 		}
 
@@ -514,7 +528,7 @@ namespace MonoDevelop.Components.AutoTest.Results
 
 		public override void SetProperty (string propertyName, object value)
 		{
-			SetProperty (resultWidget, propertyName, value);
+			base.SetProperty (resultWidget, propertyName, value);
 		}
 	}
 }

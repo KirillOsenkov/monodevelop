@@ -168,7 +168,12 @@ namespace MonoDevelop.Components.Commands
 		public static void LoadCurrentBindings (string defaultSchemaId)
 		{
 			XmlTextReader reader = null;
-			
+
+			if (!File.Exists (ConfigFileName)) {
+				ResetCurrent (defaultSchemaId);
+				return;
+			}
+
 			try {
 				reader = new XmlTextReader (ConfigFileName);
 				current.LoadScheme (reader, "current");
@@ -205,7 +210,7 @@ namespace MonoDevelop.Components.Commands
 		public string Name {
 			get {
 				if (BrandingService.ApplicationName == "MonoDevelop")
-					return AddinManager.CurrentLocalizer.GetString ("Custom");
+					return AddinManager.CurrentLocalizer.GetString ("Default");
 				else
 					return BrandingService.ApplicationName;
 			}

@@ -253,7 +253,7 @@
 	</Extension>
 
 	<Extension path = "/MonoDevelop/Ide/CommandBar">
-		<ItemSet id = "Debug">
+		<ItemSet id = "Debug" _label="Debugger">
 			<CommandItem id = "MonoDevelop.Debugger.DebugCommands.Continue" />
 			<CommandItem id = "MonoDevelop.Debugger.DebugCommands.Pause" />
 			<CommandItem id = "MonoDevelop.Debugger.DebugCommands.StepOver" />
@@ -268,6 +268,17 @@
 
 	<Extension path = "/MonoDevelop/Ide/TextEditorExtensions">
 		<Class class="MonoDevelop.Debugger.ExceptionCaughtTextEditorExtension" />
+	</Extension>
+	
+	<ConditionType id="SolutionHasDebugSourceFiles" type="MonoDevelop.Debugger.SolutionHasDebugSourceFilesCondition" />
+
+	<Extension path = "/MonoDevelop/ProjectModel/Gui/ItemOptionPanels/Common">
+		<Condition id="ItemType" value="Solution">
+			<Condition id="SolutionHasDebugSourceFiles">
+				<Section id="DebugSourceFiles" _label="Debug Source Files" icon="md-prefs-debugger" fill="true"
+					class="MonoDevelop.Debugger.DebugSourceFilesOptionsPanel" />
+			</Condition>
+		</Condition>
 	</Extension>
 </ExtensionModel>
 

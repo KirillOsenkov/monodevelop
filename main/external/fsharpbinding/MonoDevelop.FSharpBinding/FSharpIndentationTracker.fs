@@ -1,6 +1,7 @@
 ﻿namespace MonoDevelop.FSharp
 
 open System
+open System.Threading.Tasks
 open MonoDevelop.Core
 open MonoDevelop.Ide.Editor
 open MonoDevelop.Ide.Editor.Extension
@@ -25,7 +26,7 @@ type FSharpTextPasteHandler(editor:TextEditor) =
         let indent = editor.GetLineIndent nonBlankLineNumber
         [|byte indent.Length|]
 
-    override x.PostFomatPastedText (_offset, _length) = ()
+    override x.PostFomatPastedText (_offset, _length) = Task.FromResult None :> Task
 
 
     override x.FormatPlainText(offset, text, copyData) =
@@ -52,10 +53,11 @@ type FSharpTextPasteHandler(editor:TextEditor) =
                 let insertionIndent = editor.GetLineIndent line
                 let lines = String.getLines text
                 let firstLine = lines.[0]
-                let firstLineIndent = if copyData.Length > 0 then
-                                          int copyData.[0]
-                                      else
-                                          getIndent firstLine
+                let copyData = copyData |> Option.ofObj
+                let firstLineIndent =
+                    match copyData with
+                    | Some data when data.Length > 0 -> int data.[0]
+                    | _ -> getIndent firstLine
 
                 let indentDifference = insertionIndent.Length - firstLineIndent
                 let remainingLines = lines |> Seq.skip (1)
@@ -127,4 +129,4 @@ type FSharpIndentationTracker(editor:TextEditor) =
         | ex -> LoggingService.LogError ("FSharpIndentationTracker", ex)
                 ""
 
-    override x.SupportedFeatures = IndentatitonTrackerFeatures.None
+    override x.SupportedFeatures = IndentationTrackerFeatures.None ||| IndentationTrackerFeatures.CustomIndentationEngine

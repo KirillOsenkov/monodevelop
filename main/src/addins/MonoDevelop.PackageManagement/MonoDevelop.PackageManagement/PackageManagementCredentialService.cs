@@ -29,7 +29,9 @@
 using System;
 using System.Collections.Generic;
 using MonoDevelop.Core;
+using NuGet.CommandLine;
 using NuGet.Credentials;
+using NuGet.Protocol;
 
 namespace MonoDevelop.PackageManagement
 {
@@ -48,45 +50,46 @@ namespace MonoDevelop.PackageManagement
 		{
 			var credentialService = new CredentialService (
 				GetCredentialProviders (),
-				OnError,
 				nonInteractive: false);
 
-			NuGet.HttpClient.DefaultCredentialProvider = new CredentialServiceAdapter (credentialService);
-
 			HttpHandlerResourceV3Extensions.InitializeHttpHandlerResourceV3 (credentialService);
-		}
-
-		void OnError (string message)
-		{
-			PackageManagementServices.PackageManagementEvents.OnPackageOperationMessageLogged (NuGet.MessageLevel.Error, message);
 		}
 
 		IEnumerable<ICredentialProvider> GetCredentialProviders ()
 		{
 			var credentialProviders = new List<ICredentialProvider>();
 
-			var adapter = new CredentialProviderAdapter (CreateSettingsCredentialProvider ());
-			credentialProviders.Add (adapter);
+			credentialProviders.Add (CreateSettingsCredentialProvider ());
 			credentialProviders.Add (new MonoDevelopCredentialProvider ());
 
 			return credentialProviders;
 		}
 
-		static NuGet.SettingsCredentialProvider CreateSettingsCredentialProvider ()
+		static SettingsCredentialProvider CreateSettingsCredentialProvider ()
 		{
-			NuGet.ISettings settings = LoadSettings ();
-			var packageSourceProvider = new NuGet.PackageSourceProvider (settings);
-			return new NuGet.SettingsCredentialProvider (NuGet.NullCredentialProvider.Instance, packageSourceProvider);
+			var settings = SettingsLoader.LoadDefaultSettings ();
+			var packageSourceProvider = new MonoDevelopPackageSourceProvider (settings);
+			return new SettingsCredentialProvider (packageSourceProvider);
 		}
 
-		static NuGet.ISettings LoadSettings ()
+		/// <summary>
+		/// The credential service puts itself in a retry mode if a credential provider
+		/// is checked. This results in credentials stored in the key chain being ignored
+		/// and a dialog asking for credentials will be shown. This method will clear
+		/// the retry cache so credentials stored in the key chain will be re-used and a
+		/// dialog prompt will not be displayed unless the credentials are invalid. This
+		/// should be called before a user triggered action such as opening the Add
+		/// Packages dialog, restoring a project's packages, or updating a package.
+		/// </summary>
+		public static void Reset ()
 		{
 			try {
-				return NuGet.Settings.LoadDefaultSettings (null, null, null);
+				var credentialService = HttpHandlerResourceV3.CredentialService as CredentialService;
+				if (credentialService != null)
+					credentialService.Reset ();
 			} catch (Exception ex) {
-				LoggingService.LogError ("Unable to load NuGet.Config.", ex);
+				LoggingService.LogError ("Failed to reset PackageManagementCredentialService.", ex);
 			}
-			return NuGet.NullSettings.Instance;
 		}
 	}
 }

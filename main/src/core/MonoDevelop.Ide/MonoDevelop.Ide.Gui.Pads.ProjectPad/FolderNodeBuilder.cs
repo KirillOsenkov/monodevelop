@@ -1,4 +1,4 @@
-//
+﻿//
 // FolderNodeBuilder.cs
 //
 // Author:
@@ -67,7 +67,7 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 			if (project == null)
 				return;
 
-			ProjectFileCollection files;
+			List<ProjectFile> files;
 			List<string> folders;
 
 			GetFolderContent (project, path, out files, out folders);
@@ -76,11 +76,11 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 			builder.AddChildren (folders.Select (f => new ProjectFolder (f, project, dataObject)));
 		}
 				
-		void GetFolderContent (Project project, string folder, out ProjectFileCollection files, out List<string> folders)
+		void GetFolderContent (Project project, string folder, out List<ProjectFile> files, out List<string> folders)
 		{
 			string folderPrefix = folder + Path.DirectorySeparatorChar;
 
-			files = new ProjectFileCollection ();
+			files = new List<ProjectFile> ();
 			folders = new List<string> ();
 			
 			foreach (ProjectFile file in project.Files)
@@ -366,7 +366,7 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 				if (res == AlertButton.Save) {
 					try {
 						foreach (Document doc in filesToSave) {
-							doc.Save ();
+							await doc.Save ();
 						}
 					} catch (Exception ex) {
 						MessageService.ShowError (GettextCatalog.GetString ("Save operation failed."), ex);
@@ -427,7 +427,9 @@ namespace MonoDevelop.Ide.Gui.Pads.ProjectPad
 		public async void AddNewFileToProject()
 		{
 			Project project = (Project) CurrentNode.GetParentDataItem (typeof(Project), true);
-			IdeApp.ProjectOperations.CreateProjectFile (project, GetFolderPath (CurrentNode.DataItem));
+			if (!IdeApp.ProjectOperations.CreateProjectFile (project, GetFolderPath (CurrentNode.DataItem))) {
+				return;
+			}
 			CurrentNode.Expanded = true;
 			if (IdeApp.Workbench.ActiveDocument != null)
 				IdeApp.Workbench.ActiveDocument.Window.SelectWindow ();

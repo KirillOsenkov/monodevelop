@@ -169,7 +169,7 @@ namespace MonoDevelop.Ide.Gui.Wizard
 		}
 
 		public override bool CurrentPageIsLast {
-			get { return Pages.IndexOf (CurrentPage) == Pages.Count - 1; }
+			get { return pages.IndexOf (CurrentPage) == Pages.Count - 1; }
 		}
 
 		public WizardDialogController (string title, Image icon, Control rightSideWidget, IWizardDialogPage page)
@@ -185,19 +185,19 @@ namespace MonoDevelop.Ide.Gui.Wizard
 				throw new ArgumentException ("pages must contain at least one page.", nameof (pages));
 		}
 
-		protected override async Task<IWizardDialogPage> OnGoNext (CancellationToken token)
+		protected override Task<IWizardDialogPage> OnGoNext (CancellationToken token)
 		{
-			var currentIndex = Pages.IndexOf (CurrentPage);
-			if (currentIndex == Pages.Count - 1)
-				throw new InvalidOperationException ();
+			var currentIndex = pages.IndexOf (CurrentPage);
+			if (currentIndex == pages.Count - 1)
+				return Task.FromException<IWizardDialogPage>(new InvalidOperationException ());
 			else
-				return await Task.FromResult (pages [currentIndex + 1]);
+				return Task.FromResult (pages [currentIndex + 1]);
 		}
 
-		protected override async Task<IWizardDialogPage> OnGoBack (CancellationToken token)
+		protected override Task<IWizardDialogPage> OnGoBack (CancellationToken token)
 		{
-			var currentIndex = Pages.IndexOf (CurrentPage);
-			return await Task.FromResult (pages [currentIndex - 1]);
+			var currentIndex = pages.IndexOf (CurrentPage);
+			return Task.FromResult (pages [currentIndex - 1]);
 		}
 	}
 }

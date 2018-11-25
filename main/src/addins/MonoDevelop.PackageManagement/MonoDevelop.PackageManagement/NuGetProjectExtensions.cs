@@ -24,6 +24,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -31,7 +32,6 @@ using MonoDevelop.Core;
 using NuGet.Configuration;
 using NuGet.PackageManagement;
 using NuGet.ProjectManagement;
-using NuGet.ProjectManagement.Projects;
 
 namespace MonoDevelop.PackageManagement
 {
@@ -39,7 +39,7 @@ namespace MonoDevelop.PackageManagement
 	{
 		public static FilePath GetPackagesFolderPath (this NuGetProject project, IMonoDevelopSolutionManager solutionManager)
 		{
-			if (project is BuildIntegratedProjectSystem) {
+			if (project is ProjectJsonBuildIntegratedNuGetProject) {
 				string globalPackagesPath = SettingsUtility.GetGlobalPackagesFolder (solutionManager.Settings);
 
 				return new FilePath (globalPackagesPath).FullPath;
@@ -77,6 +77,16 @@ namespace MonoDevelop.PackageManagement
 			if (buildIntegratedProject != null) {
 				buildIntegratedProject.OnBeforeUninstall (actions);
 			}
+		}
+
+		public static IDotNetProject GetDotNetProject (this NuGetProject project)
+		{
+			var hasProject = project as IHasDotNetProject;
+
+			if (hasProject != null)
+				return hasProject.Project;
+
+			throw new ApplicationException (string.Format ("Unsupported NuGetProject type: {0}", project.GetType ().FullName));
 		}
 	}
 }

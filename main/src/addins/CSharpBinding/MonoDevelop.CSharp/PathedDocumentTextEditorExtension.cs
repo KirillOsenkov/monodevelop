@@ -38,6 +38,8 @@ using MonoDevelop.Ide.Editor.Extension;
 using MonoDevelop.Projects;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Extensions;
+using Microsoft.CodeAnalysis.Shared.Extensions;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 using System.Threading.Tasks;
@@ -130,7 +132,7 @@ namespace MonoDevelop.CSharp
 			isPathSet = false;
 			// Delay the execution of UpdateOwnerProjects since it may end calling DocumentContext.AttachToProject,
 			// which shouldn't be called while the extension chain is being initialized.
-			Gtk.Application.Invoke (delegate {
+			Gtk.Application.Invoke ((o, args) => {
 				UpdateOwnerProjects ();
 				Editor_CaretPositionChanged (null, null);
 			});
@@ -164,7 +166,7 @@ namespace MonoDevelop.CSharp
 			SubscribeCaretPositionChange ();
 
 			// Fixes a potential memory leak see: https://bugzilla.xamarin.com/show_bug.cgi?id=38041
-			if (ownerProjects.Count > 1) {
+			if (ownerProjects?.Count > 1) {
 				var currentOwners = ownerProjects.Where (p => p != DocumentContext.Project).Select (TypeSystemService.GetCodeAnalysisProject).ToList ();
 				CancelDocumentParsedUpdate ();
 				var token = documentParsedCancellationTokenSource.Token;
@@ -251,10 +253,10 @@ namespace MonoDevelop.CSharp
 
 		void UpdateOwnerProjects (IEnumerable<DotNetProject> allProjects)
 		{
-			if (DocumentContext == null) {
-				return;//This can happen if this object is disposed
-			}
 			Editor.RunWhenRealized (() => {
+				if (DocumentContext == null) {
+					return;//This can happen if this object is disposed
+				}
 				var projects = new HashSet<DotNetProject> (allProjects.Where (p => p.IsFileInProject (DocumentContext.Name)));
 				if (ownerProjects == null || !projects.SetEquals (ownerProjects)) {
 					SetOwnerProjects (projects.OrderBy (p => p.Name).ToList ());
@@ -346,7 +348,7 @@ namespace MonoDevelop.CSharp
 			var sol = (Projects.Solution) sender;
 			var p = sol.StartupItem as DotNetProject;
 			if (p != null && ownerProjects.Contains (p))
-				DocumentContext.AttachToProject (p);
+				DocumentContext?.AttachToProject (p);
 		}
 
 		#region IPathedDocument implementation
@@ -405,19 +407,18 @@ namespace MonoDevelop.CSharp
 				if (tag is SyntaxTree) {
 					var unit = tag as SyntaxTree;
 					memberList.AddRange (unit.GetRoot ().DescendantNodes ().Where (IsType));
-				} else if (tag is BaseTypeDeclarationSyntax) {
-					AddTypeToMemberList ((BaseTypeDeclarationSyntax)tag);
 				} else if (tag is AccessorDeclarationSyntax) {
 					var acc = (AccessorDeclarationSyntax)tag;
 					var parent = (MemberDeclarationSyntax)acc.Parent;
 					memberList.AddRange (parent.ChildNodes ().OfType<AccessorDeclarationSyntax> ());
-				} else if (tag is MemberDeclarationSyntax) {
-					var entity = (MemberDeclarationSyntax)tag;
-					var type = entity.Parent as BaseTypeDeclarationSyntax;
+				} else if (tag is SyntaxNode) {
+					var entity = (SyntaxNode)tag;
+					var type = entity.AncestorsAndSelf ().OfType<BaseTypeDeclarationSyntax> ().FirstOrDefault ();
 					if (type != null) {
 						AddTypeToMemberList (type);
 					}
 				}
+
 				memberList.Sort ((x, y) => {
 					var result = String.Compare (GetName (x), GetName (y), StringComparison.OrdinalIgnoreCase);
 					if (result == 0)
@@ -668,12 +669,14 @@ namespace MonoDevelop.CSharp
 		async static Task<PathEntry> GetRegionEntry (ParsedDocument unit, DocumentLocation loc)
 		{
 			PathEntry entry;
-			FoldingRegion reg;
+			FoldingRegion reg = null;
 			try {
-				var regions = await unit.GetUserRegionsAsync ().ConfigureAwait (false);
-				if (unit == null || !regions.Any ())
-					return null;
-				reg = regions.LastOrDefault (r => r.Region.Contains (loc));
+				if (unit != null) {
+					var regions = await unit.GetUserRegionsAsync ().ConfigureAwait (false);
+					if (!regions.Any ())
+						return null;
+					reg = regions.LastOrDefault (r => r.Region.Contains (loc));
+				}
 			} catch (AggregateException) {
 				return null;
 			} catch (OperationCanceledException) {
@@ -701,7 +704,7 @@ namespace MonoDevelop.CSharp
 		SyntaxNode lastMember;
 		string lastMemberMarkup;
 		MonoDevelop.Projects.Project lastProject;
-		AstAmbience amb;
+		AstAmbience? amb;
 		CancellationTokenSource src = new CancellationTokenSource ();
 		bool caretPositionChangedSubscribed;
 		uint updatePathTimeoutId;
@@ -711,7 +714,7 @@ namespace MonoDevelop.CSharp
 		{
 			if (amb == null || node == null)
 				return "";
-			return amb.GetEntityMarkup (node);
+			return amb.Value.GetEntityMarkup (node);
 		}
 
 
@@ -772,7 +775,7 @@ namespace MonoDevelop.CSharp
 
 				var regionEntry = await GetRegionEntry (DocumentContext.ParsedDocument, loc).ConfigureAwait (false);
 
-				Gtk.Application.Invoke (delegate {
+				Gtk.Application.Invoke ((o, args) => {
 					var result = new List<PathEntry>();
 
 					if (curProject != null) {

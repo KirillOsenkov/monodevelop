@@ -31,12 +31,8 @@ using System.Collections.Generic;
 using System.Xml;
 using System.Text;
 
-using Microsoft.Build.BuildEngine;
 using MonoDevelop.Core;
-using System.Xml.Linq;
-using System.Reflection;
 using MonoDevelop.Core.Serialization;
-using System.Globalization;
 
 namespace MonoDevelop.Projects.MSBuild
 {
@@ -77,16 +73,17 @@ namespace MonoDevelop.Projects.MSBuild
 					FilePath def = (string)prop.DefaultValue;
 					pset.SetValue (prop.Name, val, def, mergeToMainGroup: merge);
 				} else if (prop.PropertyType == typeof(string)) {
-					pset.SetValue (prop.Name, (string)prop.GetValue (ob), (string)prop.DefaultValue, merge);
+					pset.SetValue (prop.Name, (string)prop.GetValue (ob), (string)prop.DefaultValue, mergeToMainGroup:merge);
 				} else if (prop.DataType.IsSimpleType) {
-					pset.SetValue (prop.Name, prop.GetValue (ob), prop.DefaultValue, merge);
+					pset.SetValue (prop.Name, prop.GetValue (ob), prop.DefaultValue, mergeToMainGroup:merge);
 				} else if (prop.PropertyType.IsGenericType && prop.PropertyType.GetGenericTypeDefinition () == typeof(Nullable<>)) {
-					pset.SetValue (prop.Name, prop.GetValue (ob), prop.DefaultValue, merge);
+					pset.SetValue (prop.Name, prop.GetValue (ob), prop.DefaultValue, mergeToMainGroup:merge);
 				} else {
 					var val = prop.GetValue (ob);
 					if (val != null) {
 						if (cwriter == null) {
-							cwriter = new XmlConfigurationWriter { Namespace = MSBuildProject.Schema, StoreAllInElements = true };
+							string xmlns = (mso?.ParentProject != null) ? mso.ParentProject.Namespace : MSBuildProject.Schema;
+							cwriter = new XmlConfigurationWriter { Namespace = xmlns, StoreAllInElements = true };
 							xdoc = new XmlDocument ();
 						}
 						var data = prop.Serialize (ser.SerializationContext, ob, val);
@@ -381,7 +378,7 @@ namespace MonoDevelop.Projects.MSBuild
 					if (data != null) {
 						data.Name = prop.Name;
 						if (writer == null)
-							writer = new XmlConfigurationWriter { Namespace = MSBuildProject.Schema };
+							writer = new XmlConfigurationWriter { Namespace = project.Namespace };
 
 						XmlDocument doc = new XmlDocument ();
 						var elem = writer.Write (doc, data);

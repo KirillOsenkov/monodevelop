@@ -2,15 +2,16 @@
 
 open NUnit.Framework
 open MonoDevelop.FSharp
-open FsUnit
 
 [<TestFixture>]
 module ``Highlight unused opens`` =
     let assertUnusedOpens source expected =
         let doc = TestHelpers.createDoc source "defined"
-        let res = highlightUnusedCode.getUnusedCode doc doc.Editor
+        let res =
+            highlightUnusedCode.getUnusedCode doc doc.Editor
+            |> Async.RunSynchronously
         let opens = res.Value |> List.map(fun range -> highlightUnusedCode.textFromRange doc.Editor range)
-        opens |> should equal expected
+        Assert.AreEqual(expected, opens, sprintf "%A" opens)
 
     [<Test>]
     let Simple() =
@@ -46,18 +47,22 @@ module ``Highlight unused opens`` =
         assertUnusedOpens source []
 
     [<Test>]
-    let ``Auto open namespace not needed for nested module``() =
-        let source = 
+    let ``Active Patterns``() =
+        let source =
             """
-            namespace module1namespace
-            [<AutoOpen>]
+            namespace n
+            module ActivePattern =
+                let (|NotEmpty|_|) s =
+                    match s with
+                    | "" -> None
+                    | _ -> Some NotEmpty
+            namespace namespace1
+            open n.ActivePattern
             module module1 =
-                module module2 =
-                    let x = 1
-            namespace consumernamespace
-            open module1namespace
-            module module3 =
-                let y = module2.x
+                let s = ""
+                match s with
+                | NotEmpty -> Some s
+                | _ -> None
             """
         assertUnusedOpens source []
 
@@ -122,5 +127,44 @@ module ``Highlight unused opens`` =
             open MonoDevelop.Core
             module module1 =
                 let someFunc(selection:Text.ISegment) = 1
+            """
+        assertUnusedOpens source []
+
+    [<Test>]
+    let ``Microsoft.FSharp namespace is special``() =
+        let source =
+            """
+            open FSharp.Reflection
+            module test=FSharpType.IsFunction typeof<int> |> ignore
+            """
+        assertUnusedOpens source []
+
+    [<Test>]
+    let ``Type extension``() =
+        let source =
+            """
+            namespace TypeExtension
+            module ExtensionModule =
+                type System.String with
+                    member x.SomeExtensionMethod () = ()
+            namespace namespace1
+            open TypeExtension.ExtensionModule
+            module myModule =
+                let x = "".SomeExtensionMethod()
+            """
+        assertUnusedOpens source []
+
+    [<Test>]
+    let ``open module``() =
+        let source =
+            """
+            module ElmishSample.Counter.Types
+
+            type Model = { count: int }
+
+            module ElmishSample.Counter.State
+
+            open Types
+            let init () = { count = 0 }
             """
         assertUnusedOpens source []

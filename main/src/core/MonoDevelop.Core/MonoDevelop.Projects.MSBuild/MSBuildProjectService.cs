@@ -1,4 +1,4 @@
-// MSBuildProjectService.cs
+﻿// MSBuildProjectService.cs
 //
 // Author:
 //   Lluis Sanchez Gual <lluis@novell.com>
@@ -44,6 +44,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Xml;
 using MonoDevelop.Core.Execution;
+using System.Xml.Linq;
 
 namespace MonoDevelop.Projects.MSBuild
 {
@@ -54,30 +55,41 @@ namespace MonoDevelop.Projects.MSBuild
 		internal const string GlobalPropertyProvidersExtensionPath = "/MonoDevelop/ProjectModel/MSBuildGlobalPropertyProviders";
 		internal const string UnknownMSBuildProjectTypesExtensionPath = "/MonoDevelop/ProjectModel/UnknownMSBuildProjectTypes";
 		internal const string MSBuildProjectItemTypesPath = "/MonoDevelop/ProjectModel/MSBuildProjectItemTypes";
+		internal const string MSBuildImportSearchPathsPath = "/MonoDevelop/ProjectModel/MSBuildImportSearchPaths";
 
 		public const string GenericItemGuid = "{9344BDBB-3E7F-41FC-A0DD-8665D75EE146}";
 		public const string FolderTypeGuid = "{2150E333-8FDC-42A3-9474-1A3956D46DE8}";
-		
+
 		//NOTE: default toolsversion should match the default format.
 		// remember to update the builder process' app.config too
 		public const string DefaultFormat = "MSBuild12";
-		
+
 		static DataContext dataContext;
-		
-		static IMSBuildGlobalPropertyProvider[] globalPropertyProviders;
-		static BuilderCache builders = new BuilderCache ();
-		static Dictionary<string,Type> genericProjectTypes = new Dictionary<string, Type> ();
-		static Dictionary<string,string> importRedirects = new Dictionary<string, string> ();
-		static UnknownProjectTypeNode[] unknownProjectTypeNodes;
-		static IDictionary<string,TypeExtensionNode> projecItemTypeNodes;
 
-		static AsyncCriticalSection buildersLock = new AsyncCriticalSection ();
+		static IMSBuildGlobalPropertyProvider [] globalPropertyProviders;
+		static Dictionary<string, Type> genericProjectTypes = new Dictionary<string, Type> ();
+		static Dictionary<string, string> importRedirects = new Dictionary<string, string> ();
+		static UnknownProjectTypeNode [] unknownProjectTypeNodes;
+		static IDictionary<string, TypeExtensionNode> projecItemTypeNodes;
+		static ImportSearchPathExtensionNode [] searchPathNodes;
 
+		static Dictionary<TargetRuntime, List<ImportSearchPathExtensionNode>> defaultImportSearchPaths = new Dictionary<TargetRuntime, List<ImportSearchPathExtensionNode>> ();
+		static List<ImportSearchPathExtensionNode> importSearchPaths = new List<ImportSearchPathExtensionNode> ();
 
 		internal static bool ShutDown { get; private set; }
 
-		static ExtensionNode[] itemTypeNodes;
-		
+		static ExtensionNode [] itemTypeNodes;
+
+		/// <summary>
+		/// Occurs when there is a change in any global property provider
+		/// </summary>
+		internal static event EventHandler GlobalPropertyProvidersChanged;
+
+		/// <summary>
+		/// Occurs when import search paths change.
+		/// </summary>
+		public static event EventHandler ImportSearchPathsChanged;
+
 		public static DataContext DataContext {
 			get {
 				if (dataContext == null) {
@@ -87,7 +99,16 @@ namespace MonoDevelop.Projects.MSBuild
 				return dataContext;
 			}
 		}
-		
+
+		internal static IEnumerable<IMSBuildGlobalPropertyProvider> GlobalPropertyProviders {
+			get {
+				if (customGlobalPropertyProviders != null)
+					return globalPropertyProviders.Concat (customGlobalPropertyProviders);
+				else
+					return globalPropertyProviders;
+			}
+		}
+
 		static MSBuildProjectService ()
 		{
 			Services.ProjectService.DataContextChanged += delegate {
@@ -109,7 +130,28 @@ namespace MonoDevelop.Projects.MSBuild
 				specialCharactersEscaped [specialCharacters [i]] = '%' + escaped;
 				specialCharactersUnescaped [escaped] = specialCharacters [i];
 			}
+
+			SetupDotNetCore ();
 		}
+
+		static void SetupDotNetCore ()
+		{
+			if (Platform.IsWindows)
+				return;
+
+			// Add .NET Core root directory to PATH. Without this, the MSBuild SDK resolver doesn't work.
+
+			string dotnetDir;
+			if (Platform.IsMac)
+				dotnetDir = "/usr/local/share/dotnet";
+			else
+				dotnetDir = "/usr/share/dotnet";
+		
+			var systemPath = Environment.GetEnvironmentVariable ("PATH");
+			if (!systemPath.Split (new char [] { ':' }).Contains (dotnetDir))
+				Environment.SetEnvironmentVariable ("PATH", systemPath + ":" + dotnetDir);
+		}
+	
 
 		static void OnExtensionChanged (object sender, ExtensionEventArgs args)
 		{
@@ -117,8 +159,12 @@ namespace MonoDevelop.Projects.MSBuild
 				args.Path == ImportRedirectsExtensionPath || 
 				args.Path == UnknownMSBuildProjectTypesExtensionPath || 
 				args.Path == GlobalPropertyProvidersExtensionPath ||
-				args.Path == MSBuildProjectItemTypesPath)
+				args.Path == MSBuildProjectItemTypesPath ||
+				args.Path == MSBuildImportSearchPathsPath)
 				LoadExtensionData ();
+
+			if (args.Path == MSBuildImportSearchPathsPath)
+				OnImportSearchPathsChanged ();
 		}
 
 		static void LoadExtensionData ()
@@ -133,7 +179,7 @@ namespace MonoDevelop.Projects.MSBuild
 			globalPropertyProviders = AddinManager.GetExtensionObjects<IMSBuildGlobalPropertyProvider> (GlobalPropertyProvidersExtensionPath);
 
 			foreach (var gpp in globalPropertyProviders)
-				gpp.GlobalPropertiesChanged -= HandleGlobalPropertyProviderChanged;
+				gpp.GlobalPropertiesChanged += HandleGlobalPropertyProviderChanged;
 
 			// Get item type nodes
 
@@ -151,6 +197,8 @@ namespace MonoDevelop.Projects.MSBuild
 			unknownProjectTypeNodes = AddinManager.GetExtensionNodes<UnknownProjectTypeNode> (UnknownMSBuildProjectTypesExtensionPath).ToArray ();
 
 			projecItemTypeNodes = AddinManager.GetExtensionNodes<TypeExtensionNode> (MSBuildProjectItemTypesPath).ToDictionary (e => e.TypeName);
+
+			searchPathNodes = AddinManager.GetExtensionNodes<ImportSearchPathExtensionNode> (MSBuildImportSearchPathsPath).ToArray();
 		}
 
 		static Dictionary<string,Type> customProjectItemTypes = new Dictionary<string,Type> ();
@@ -165,13 +213,124 @@ namespace MonoDevelop.Projects.MSBuild
 			customProjectItemTypes.Remove (name);
 		}
 
-		static async void HandleGlobalPropertyProviderChanged (object sender, EventArgs e)
+		static List<IMSBuildGlobalPropertyProvider> customGlobalPropertyProviders;
+
+		internal static void RegisterGlobalPropertyProvider (IMSBuildGlobalPropertyProvider provider)
 		{
-			using (await buildersLock.EnterAsync ()) {
-				var gpp = (IMSBuildGlobalPropertyProvider)sender;
-				foreach (var builder in builders.GetAllBuilders ())
-					await builder.SetGlobalProperties (new Dictionary<string,string> (gpp.GetGlobalProperties ()));
+			if (customGlobalPropertyProviders == null)
+				customGlobalPropertyProviders = new List<IMSBuildGlobalPropertyProvider> ();
+			customGlobalPropertyProviders.Add (provider);
+		}
+
+		internal static void UnregisterGlobalPropertyProvider (IMSBuildGlobalPropertyProvider provider)
+		{
+			if (customGlobalPropertyProviders != null)
+				customGlobalPropertyProviders.Remove (provider);
+		}
+
+		/// <summary>
+		/// Registers a custom project import search path. This path will be used as a fallback when evaluating
+		/// an import and targets file is not found using the value assigned by MSBuild to the property.
+		/// </summary>
+		/// <param name="propertyName">Name of the property for which to add a fallback path</param>
+		/// <param name="path">The fallback path</param>
+		public static void RegisterProjectImportSearchPath (string propertyName, FilePath path)
+		{
+			if (!importSearchPaths.Any (sp => sp.Property == propertyName && sp.Path == path)) {
+				importSearchPaths.Add (new ImportSearchPathExtensionNode { Property = propertyName, Path = path });
+				OnImportSearchPathsChanged ();
 			}
+		}
+
+		/// <summary>
+		/// Unregisters a previously registered import search path
+		/// </summary>
+		/// <param name="propertyName">Name of the property for which a fallback path was added.</param>
+		/// <param name="path">The fallback path to remove</param>
+		public static void UnregisterProjectImportSearchPath (string propertyName, FilePath path)
+		{
+			importSearchPaths.RemoveAll (i => i.Property == propertyName && i.Path == path);
+			OnImportSearchPathsChanged ();
+		}
+
+		/// <summary>
+		/// Gets a list of all search paths assigned to properties
+		/// </summary>
+		/// <returns>The search paths</returns>
+		/// <param name="runtime">Runtime for which to get the search paths.</param>
+		/// <param name="includeImplicitImports">If set to <c>true</c>, it returns all search paths, including those registered by
+		/// MSBuild and those registered using RegisterProjectImportSearchPath. If <c>false</c>, it only returns the paths
+		/// registered by RegisterProjectImportSearchPath.</param>
+		internal static IEnumerable<ImportSearchPathExtensionNode> GetProjectImportSearchPaths (TargetRuntime runtime, bool includeImplicitImports)
+		{
+			var result = searchPathNodes.Concat (importSearchPaths);
+			if (includeImplicitImports)
+				result = LoadDefaultProjectImportSearchPaths (runtime).Concat (result);
+			return result;
+		}
+
+		internal static string GetDefaultSdksPath (TargetRuntime runtime)
+		{
+			string binDir;
+			GetNewestInstalledToolsVersion (runtime, true, out binDir);
+			return Path.Combine (binDir, "Sdks");
+		}
+
+		internal static IEnumerable<SdkInfo> FindRegisteredSdks ()
+		{
+			foreach (var node in GetProjectImportSearchPaths (null, false).Where (n => n.Property == "MSBuildSDKsPath")) {
+				if (Directory.Exists (node.Path)) {
+					foreach (var dir in Directory.GetDirectories (node.Path)) {
+						if (File.Exists (Path.Combine (dir, "Sdk", "Sdk.props")))
+							yield return new SdkInfo (Path.GetFileName (dir), null, Path.Combine (dir, "Sdk"));
+					}
+				}
+			}
+		}
+
+		static List<ImportSearchPathExtensionNode> LoadDefaultProjectImportSearchPaths (TargetRuntime runtime)
+		{
+			// Load the default search paths defined in MSBuild.dll.config
+
+			lock (defaultImportSearchPaths) {
+				List<ImportSearchPathExtensionNode> list;
+				if (defaultImportSearchPaths.TryGetValue (runtime, out list))
+					return list;
+
+				list = new List<ImportSearchPathExtensionNode> ();
+				defaultImportSearchPaths [runtime] = list;
+
+				string binDir;
+				GetNewestInstalledToolsVersion (runtime, true, out binDir);
+
+				var configFileName = Platform.IsWindows ? "MSBuild.exe.config" : "MSBuild.dll.config";
+				var configFile = Path.Combine (binDir, configFileName);
+				if (File.Exists (configFile)) {
+					var doc = XDocument.Load (configFile);
+					var projectImportSearchPaths = doc.Root.Elements ("msbuildToolsets").FirstOrDefault ()?.Elements ("toolset")?.FirstOrDefault ()?.Element ("projectImportSearchPaths");
+					if (projectImportSearchPaths != null) {
+						var os = Platform.IsMac ? "osx" : Platform.IsWindows ? "windows" : "unix";
+						foreach (var searchPaths in projectImportSearchPaths.Elements ("searchPaths")) {
+							var pathOs = (string)searchPaths.Attribute ("os")?.Value;
+							if (!string.IsNullOrEmpty (pathOs) && pathOs != os)
+								continue;
+							foreach (var property in searchPaths.Elements ("property"))
+								list.Add (new ImportSearchPathExtensionNode { Property = property.Attribute ("name").Value, Path = property.Attribute ("value").Value });
+						}
+					}
+				}
+				return list;
+			}
+		}
+
+		static void OnImportSearchPathsChanged ()
+		{
+			ImportSearchPathsChanged?.Invoke (null, EventArgs.Empty);
+		}
+
+		static void HandleGlobalPropertyProviderChanged (object sender, EventArgs e)
+		{
+			GlobalPropertyProvidersChanged?.Invoke (null, EventArgs.Empty);
 		}
 
 		static void HandlePropertyChanged (object sender, PropertyChangedEventArgs e)
@@ -231,7 +390,7 @@ namespace MonoDevelop.Projects.MSBuild
 			var node = GetItemTypeNodes ().FirstOrDefault (n => n.CanHandleFile (fileName, typeGuid));
 
 			if (node != null) {
-				item = await node.CreateSolutionItem (monitor, ctx, fileName);
+				item = await node.CreateSolutionItem (monitor, ctx, fileName).ConfigureAwait (false);
 				if (item == null)
 					return null;
 			}
@@ -251,7 +410,7 @@ namespace MonoDevelop.Projects.MSBuild
 				item.NotifyItemReady ();
 			};
 
-			await item.LoadAsync (monitor, fileName, expectedFormat);
+			await item.LoadAsync (monitor, fileName, expectedFormat, itemGuid).ConfigureAwait (false);
 			return item;
 		}
 
@@ -404,7 +563,7 @@ namespace MonoDevelop.Projects.MSBuild
 		internal static MSBuildSupport GetMSBuildSupportForFlavors (IEnumerable<string> flavorGuids)
 		{
 			foreach (var fid in flavorGuids) {
-				var node = WorkspaceObject.GetModelExtensions (null).OfType<SolutionItemExtensionNode> ().FirstOrDefault (n => n.Guid.Equals (fid, StringComparison.InvariantCultureIgnoreCase));
+				var node = WorkspaceObject.GetModelExtensions (null).OfType<SolutionItemExtensionNode> ().FirstOrDefault (n => n.Guid != null && n.Guid.Equals (fid, StringComparison.InvariantCultureIgnoreCase));
 				if (node != null) {
 					if (node.MSBuildSupport != MSBuildSupport.Supported)
 						return node.MSBuildSupport;
@@ -419,7 +578,7 @@ namespace MonoDevelop.Projects.MSBuild
 			var list = new List<SolutionItemExtensionNode> ();
 			foreach (var fid in flavorGuids) {
 				foreach (var node in WorkspaceObject.GetModelExtensions (null).OfType<SolutionItemExtensionNode> ()) {
-					if (node.SupportsMigration && node.Guid.Equals (fid, StringComparison.InvariantCultureIgnoreCase))
+					if (node.SupportsMigration && node.Guid != null && node.Guid.Equals (fid, StringComparison.InvariantCultureIgnoreCase))
 						list.Add (node);
 				}
 			}
@@ -520,7 +679,7 @@ namespace MonoDevelop.Projects.MSBuild
 
 		internal static bool IsKnownFlavorGuid (string guid)
 		{
-			return WorkspaceObject.GetModelExtensions (null).OfType<SolutionItemExtensionNode> ().Any (n => n.Guid.Equals (guid, StringComparison.InvariantCultureIgnoreCase));
+			return WorkspaceObject.GetModelExtensions (null).OfType<SolutionItemExtensionNode> ().Any (n => n.Guid != null && n.Guid.Equals (guid, StringComparison.InvariantCultureIgnoreCase));
 		}
 
 		internal static bool IsKnownTypeGuid (string guid)
@@ -664,6 +823,10 @@ namespace MonoDevelop.Projects.MSBuild
 					return null;
 				tr.ReadStartElement ();
 				tr.MoveToContent ();
+				while (tr.LocalName != "PropertyGroup" && !tr.EOF) {
+					tr.Skip ();
+					tr.MoveToContent ();
+				}
 				if (tr.LocalName != "PropertyGroup")
 					return null;
 				if (tr.IsEmptyElement)
@@ -910,10 +1073,10 @@ namespace MonoDevelop.Projects.MSBuild
 			return true;
 		}
 
-		static string GetNewestInstalledToolsVersion (TargetRuntime runtime, bool requiresMicrosoftBuild, out string binDir)
+		internal static string GetNewestInstalledToolsVersion (TargetRuntime runtime, bool requiresMicrosoftBuild, out string binDir)
 		{
 			string [] supportedToolsVersions;
-			if ((requiresMicrosoftBuild || Runtime.Preferences.BuildWithMSBuild) && !Platform.IsWindows)
+			if (requiresMicrosoftBuild || Runtime.Preferences.BuildWithMSBuild || Platform.IsWindows)
 				supportedToolsVersions = new [] { "15.0"};
 			else
 				supportedToolsVersions = new [] { "14.0", "12.0", "4.0" };
@@ -925,153 +1088,6 @@ namespace MonoDevelop.Projects.MSBuild
 				}
 			}
 			throw new Exception ("Did not find MSBuild for runtime " + runtime.Id);
-		}
-
-		internal static async Task<RemoteProjectBuilder> GetProjectBuilder (TargetRuntime runtime, string minToolsVersion, string file, string solutionFile, int customId, bool requiresMicrosoftBuild, bool lockBuilder = false)
-		{
-			Version mtv = Version.Parse (minToolsVersion);
-			if (mtv >= new Version (15,0))
-				requiresMicrosoftBuild = true;
-
-			using (await buildersLock.EnterAsync ())
-			{
-				string binDir;
-				var toolsVersion = GetNewestInstalledToolsVersion (runtime, requiresMicrosoftBuild, out binDir);
-
-				Version tv;
-				if (Version.TryParse (toolsVersion, out tv) && Version.TryParse (minToolsVersion, out mtv) && tv < mtv) {
-					throw new InvalidOperationException (string.Format (
-						"Project requires MSBuild ToolsVersion '{0}' which is not supported by runtime '{1}'",
-						toolsVersion, runtime.Id)
-					);
-				}
-
-				//one builder per solution
-				string builderKey = runtime.Id + " # " + solutionFile + " # " + customId + " # " + requiresMicrosoftBuild;
-
-				RemoteBuildEngine builder = null;
-
-				if (lockBuilder) {
-					foreach (var b in builders.GetBuilders (builderKey)) {
-						if (b.Lock ()) {
-							builder = b;
-							break;
-						}
-						b.Unlock ();
-					}
-				} else
-					builder = builders.GetBuilders (builderKey).FirstOrDefault ();
-				
-				if (builder != null) {
-					builder.ReferenceCount++;
-					var pb = new RemoteProjectBuilder (file, builder);
-					await pb.Load ();
-					return pb;
-				}
-
-				return await Task.Run (async () => {
-					//always start the remote process explicitly, even if it's using the current runtime and fx
-					//else it won't pick up the assembly redirects from the builder exe
-					var exe = GetExeLocation (runtime, toolsVersion, requiresMicrosoftBuild);
-					RemoteProcessConnection connection = null;
-
-					try {
-							
-						connection = new RemoteProcessConnection (exe, runtime.GetExecutionHandler ());
-						await connection.Connect ();
-
-						var props = GetCoreGlobalProperties (solutionFile);
-						foreach (var gpp in globalPropertyProviders) {
-							foreach (var e in gpp.GetGlobalProperties ())
-								props [e.Key] = e.Value;
-						}
-						
-						await connection.SendMessage (new InitializeRequest {
-							IdeProcessId = Process.GetCurrentProcess ().Id,
-							BinDir = binDir,
-							CultureName = GettextCatalog.UICulture.Name,
-							GlobalProperties = props
-						});
-
-						builder = new RemoteBuildEngine (connection);
-
-					} catch {
-						if (connection != null) {
-							try {
-								connection.Dispose ();
-							} catch {
-							}
-						}
-						throw;
-					}
-
-					builders.Add (builderKey, builder);
-					builder.ReferenceCount = 1;
-					builder.Disconnected += async delegate {
-						using (await buildersLock.EnterAsync ())
-							builders.Remove (builder);
-					};
-					if (lockBuilder)
-						builder.Lock ();
-					var pb = new RemoteProjectBuilder (file, builder);
-					await pb.Load ();
-					return pb;
-				});
-			}
-		}
-
-		static Dictionary<string,string> GetCoreGlobalProperties (string slnFile)
-		{
-			var dictionary = new Dictionary<string,string> ();
-
-			//this causes build targets to behave how they should inside an IDE, instead of in a command-line process
-			dictionary.Add ("BuildingInsideVisualStudio", "true");
-
-			//we don't have host compilers in MD, and this is set to true by some of the MS targets
-			//which causes it to always run the CoreCompile task if BuildingInsideVisualStudio is also
-			//true, because the VS in-process compiler would take care of the deps tracking
-			dictionary.Add ("UseHostCompilerIfAvailable", "false" );
-
-			if (string.IsNullOrEmpty (slnFile))
-				return dictionary;
-
-			dictionary.Add ("SolutionPath", Path.GetFullPath (slnFile));
-			dictionary.Add ("SolutionName", Path.GetFileNameWithoutExtension (slnFile));
-			dictionary.Add ("SolutionFilename", Path.GetFileName (slnFile));
-			dictionary.Add ("SolutionDir", Path.GetDirectoryName (slnFile) + Path.DirectorySeparatorChar);
-
-			return dictionary;;
-		}
-		
-		static string GetExeLocation (TargetRuntime runtime, string toolsVersion, bool requiresMicrosoftBuild)
-		{
-			var builderDir = new FilePath (typeof(MSBuildProjectService).Assembly.Location).ParentDirectory.Combine ("MSBuild");
-
-			var version = Version.Parse (toolsVersion);
-			bool useMicrosoftBuild = 
-				requiresMicrosoftBuild ||
-				((version >= new Version (15, 0)) && Runtime.Preferences.BuildWithMSBuild) ||
-				(version >= new Version (4, 0) && runtime is MsNetTargetRuntime);
-
-			if (useMicrosoftBuild) {
-				toolsVersion = "dotnet." + (version >= new Version (15, 0) ? "14.1" : toolsVersion);
-			}
-
-			var exe = builderDir.Combine (toolsVersion, "MonoDevelop.Projects.Formats.MSBuild.exe");
-			if (File.Exists (exe))
-				return exe;
-			
-			throw new InvalidOperationException ("Unsupported MSBuild ToolsVersion '" + version + "'");
-		}
-
-		internal static async void ReleaseProjectBuilder (RemoteBuildEngine engine)
-		{
-			using (await buildersLock.EnterAsync ()) {
-				if (--engine.ReferenceCount != 0)
-					return;
-				builders.Remove (engine);
-			}
-			engine.Dispose ();
 		}
 
 		static Dictionary<string, string> cultureNamesTable;

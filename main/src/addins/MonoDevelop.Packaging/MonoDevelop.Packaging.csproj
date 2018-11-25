@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="..\..\..\MonoDevelop.props" />
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
@@ -9,7 +10,7 @@
     <OutputType>Library</OutputType>
     <RootNamespace>MonoDevelop.Packaging</RootNamespace>
     <AssemblyName>MonoDevelop.Packaging</AssemblyName>
-    <TargetFrameworkVersion>v4.5</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.6.1</TargetFrameworkVersion>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
@@ -36,20 +37,16 @@
     <Reference Include="atk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f" />
     <Reference Include="gdk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f" />
     <Reference Include="Mono.Posix" />
-    <Reference Include="NuGet.ProjectManagement">
-      <HintPath>..\..\..\external\nuget-binary\NuGet.ProjectManagement.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="NuGet.Protocol.Core.Types">
-      <HintPath>..\..\..\external\nuget-binary\NuGet.Protocol.Core.Types.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="NuGet.Packaging.Core.Types">
-      <HintPath>..\..\..\external\nuget-binary\NuGet.Packaging.Core.Types.dll</HintPath>
+    <Reference Include="NuGet.Protocol">
+      <HintPath>..\..\..\external\nuget-binary\NuGet.Protocol.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="NuGet.Packaging">
       <HintPath>..\..\..\external\nuget-binary\NuGet.Packaging.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="NuGet.Packaging.Core">
+      <HintPath>..\..\..\external\nuget-binary\NuGet.Packaging.Core.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="NuGet.Frameworks">
@@ -90,7 +87,6 @@
     <Compile Include="MonoDevelop.Packaging\NuGetFilePropertyProvider.cs" />
     <Compile Include="MonoDevelop.Packaging\NuGetFileDescriptor.cs" />
     <Compile Include="MonoDevelop.Packaging\PackagingNuGetProject.cs" />
-    <Compile Include="MonoDevelop.Packaging\PackageReference.cs" />
     <Compile Include="MonoDevelop.Packaging\PackageReferenceCollection.cs" />
     <Compile Include="MonoDevelop.Packaging\AddPlatformImplementationHandler.cs" />
     <Compile Include="MonoDevelop.Packaging.Gui\AddPlatformImplementationDialog.cs" />
@@ -119,7 +115,10 @@
       <DependentUpon>GtkProjectNuGetBuildOptionsPanelWidget.cs</DependentUpon>
     </Compile>
     <Compile Include="MonoDevelop.Packaging.OptionPanels\ProjectNuGetBuildOptionsPanel.cs" />
-    <Compile Include="MonoDevelop.Packaging\ProjectIsDotNetProjectOnlyCondition.cs" />
+    <Compile Include="MonoDevelop.Packaging\ProjectPackageReferenceExtensions.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="MonoDevelop.Packaging.Tests" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\core\MonoDevelop.Core\MonoDevelop.Core.csproj">

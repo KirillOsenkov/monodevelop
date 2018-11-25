@@ -58,6 +58,8 @@ namespace MonoDevelop.Debugger
 
 		protected Label ExceptionMessageLabel { get; private set; }
 
+		protected Label ExceptionHelpLinkLabel { get; private set; }
+
 		protected Label ExceptionTypeLabel { get; private set; }
 
 		readonly ExceptionCaughtMessage message;
@@ -101,15 +103,30 @@ namespace MonoDevelop.Debugger
 
 			ExceptionTypeLabel = new Label { Xalign = 0.0f, Selectable = true, CanFocus = false };
 			ExceptionMessageLabel = new Label { Wrap = true, Xalign = 0.0f, Selectable = true, CanFocus = false };
+			ExceptionHelpLinkLabel = new Label { Wrap = true, Xalign = 0.0f, Selectable = true, CanFocus = false, UseMarkup = true, LineWrapMode = Pango.WrapMode.Char };
+			ExceptionHelpLinkLabel.Name = "exception_help_link_label";
+			Gtk.Rc.ParseString (@"style ""exception-help-link-label""
+{
+	GtkWidget::link-color = ""#ffffff""
+	GtkWidget::visited-link-color = ""#ffffff""
+}
+widget ""*.exception_help_link_label"" style ""exception-help-link-label""
+");
+			ExceptionHelpLinkLabel.ModifyBase (StateType.Prelight, new Gdk.Color (119, 130, 140));
+
+			ExceptionHelpLinkLabel.SetLinkHandler ((str) => DesktopService.ShowUrl (str));
 			ExceptionTypeLabel.ModifyFg (StateType.Normal, new Gdk.Color (255, 255, 255));
 			ExceptionMessageLabel.ModifyFg (StateType.Normal, new Gdk.Color (255, 255, 255));
+			ExceptionHelpLinkLabel.ModifyFg (StateType.Normal, new Gdk.Color (255, 255, 255));
 
 			if (Platform.IsWindows) {
 				ExceptionTypeLabel.ModifyFont (Pango.FontDescription.FromString ("bold 19"));
 				ExceptionMessageLabel.ModifyFont (Pango.FontDescription.FromString ("10"));
+				ExceptionHelpLinkLabel.ModifyFont (Pango.FontDescription.FromString ("10"));
 			} else {
 				ExceptionTypeLabel.ModifyFont (Pango.FontDescription.FromString ("21"));
 				ExceptionMessageLabel.ModifyFont (Pango.FontDescription.FromString ("12"));
+				ExceptionHelpLinkLabel.ModifyFont (Pango.FontDescription.FromString ("12"));
 			}
 
 			//Force rendering of background with EventBox
@@ -121,6 +138,7 @@ namespace MonoDevelop.Debugger
 
 			rightVBox.PackStart (ExceptionTypeLabel, false, false, (uint)(Platform.IsWindows ? 0 : 2));
 			rightVBox.PackStart (ExceptionMessageLabel, true, true, (uint)(Platform.IsWindows ? 6 : 5));
+			rightVBox.PackStart (ExceptionHelpLinkLabel, false, false, 2);
 
 			hBox.PackStart (leftVBox, false, false, (uint)(Platform.IsWindows ? 5 : 0)); // as we change frame.BorderWidth below, we need to compensate
 			hBox.PackStart (rightVBox, true, true, (uint)(Platform.IsWindows ? 5 : 10));
@@ -142,8 +160,11 @@ namespace MonoDevelop.Debugger
 		{
 			base.OnSizeAllocated (allocation);
 			ExceptionMessageLabel.WidthRequest = rightVBox.Allocation.Width;
-			if (vboxAroundInnerExceptionMessage != null)
+			ExceptionHelpLinkLabel.WidthRequest = rightVBox.Allocation.Width;
+			if (vboxAroundInnerExceptionMessage != null) {
 				InnerExceptionMessageLabel.WidthRequest = vboxAroundInnerExceptionMessage.Allocation.Width;
+				InnerExceptionHelpLinkLabel.WidthRequest = vboxAroundInnerExceptionMessage.Allocation.Width;
+			}
 		}
 
 		Widget CreateExceptionValueTreeView ()
@@ -374,6 +395,7 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 
 		Label InnerExceptionTypeLabel;
 		Label InnerExceptionMessageLabel;
+		Label InnerExceptionHelpLinkLabel;
 
 		Widget CreateInnerExceptionMessage ()
 		{
@@ -398,8 +420,20 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 			InnerExceptionMessageLabel.CanFocus = false;
 			InnerExceptionMessageLabel.Xalign = 0;
 			InnerExceptionMessageLabel.ModifyFont (Pango.FontDescription.FromString (Platform.IsWindows ? "9" : "11"));
+
+			InnerExceptionHelpLinkLabel = new Label ();
+			InnerExceptionHelpLinkLabel.UseMarkup = true;
+			InnerExceptionHelpLinkLabel.Wrap = true;
+			InnerExceptionHelpLinkLabel.LineWrapMode = Pango.WrapMode.Char;
+			InnerExceptionHelpLinkLabel.Selectable = true;
+			InnerExceptionHelpLinkLabel.CanFocus = false;
+			InnerExceptionHelpLinkLabel.Xalign = 0;
+			InnerExceptionHelpLinkLabel.ModifyFont (Pango.FontDescription.FromString (Platform.IsWindows ? "9" : "11"));
+			InnerExceptionHelpLinkLabel.SetLinkHandler ((str) => DesktopService.ShowUrl (str));
+
 			vboxAroundInnerExceptionMessage.PackStart (hbox, false, true, 0);
 			vboxAroundInnerExceptionMessage.PackStart (InnerExceptionMessageLabel, true, true, 10);
+			vboxAroundInnerExceptionMessage.PackStart (InnerExceptionHelpLinkLabel, true, true, 2);
 			hboxMain.PackStart (vboxAroundInnerExceptionMessage, true, true, 10);
 			hboxMain.ShowAll ();
 			return hboxMain;
@@ -455,7 +489,10 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 			var eventBox = new EventBox ();
 			eventBox.ModifyBg (StateType.Normal, Styles.ExceptionCaughtDialog.TreeBackgroundColor.ToGdkColor ()); // top and bottom padders
 			var vbox = new VBox ();
-			vbox.PackStart (InnerExceptionsTreeView, true, true, 12);
+			var scroll = new ScrolledWindow ();
+			scroll.WidthRequest = 200;
+			scroll.Child = InnerExceptionsTreeView;
+			vbox.PackStart (scroll, true, true, 12);
 			eventBox.Add (vbox);
 			eventBox.ShowAll ();
 			return eventBox;
@@ -486,7 +523,7 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 				}
 			});
 			exception.Changed += delegate {
-				Application.Invoke (delegate {
+				Application.Invoke ((o, args) => {
 					InnerExceptionsStore.EmitRowChanged (InnerExceptionsStore.GetPath (iter), iter);
 					updateInnerExceptions ();
 					InnerExceptionsTreeView.ExpandRow (InnerExceptionsStore.GetPath (iter), true);
@@ -564,6 +601,12 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 			if (InnerExceptionTypeLabel != null) {
 				InnerExceptionTypeLabel.Markup = "<b>" + GLib.Markup.EscapeText (ex.Type) + "</b>";
 				InnerExceptionMessageLabel.Text = ex.Message;
+				if (!string.IsNullOrEmpty (ex.HelpLink)) {
+					InnerExceptionHelpLinkLabel.Markup = GetHelpLinkMarkup (ex);
+					InnerExceptionHelpLinkLabel.Show ();
+				} else {
+					InnerExceptionHelpLinkLabel.Hide ();
+				}
 			}
 		}
 
@@ -574,13 +617,24 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 
 			ExceptionTypeLabel.Text = exception.Type;
 			ExceptionMessageLabel.Text = exception.Message ?? string.Empty;
+			if (!string.IsNullOrEmpty (exception.HelpLink)) {
+				ExceptionHelpLinkLabel.Show ();
+				ExceptionHelpLinkLabel.Markup = GetHelpLinkMarkup(exception);
+			} else {
+				ExceptionHelpLinkLabel.Hide ();
+			}
 
 			UpdateSelectedException (exception);
 		}
 
+		internal static string GetHelpLinkMarkup (ExceptionInfo exception)
+		{
+			return $"<a href=\"{System.Security.SecurityElement.Escape (exception.HelpLink)}\">{GettextCatalog.GetString ("More information")}</a>";
+		}
+
 		void ExceptionChanged (object sender, EventArgs e)
 		{
-			Application.Invoke (delegate {
+			Application.Invoke ((o, args) => {
 				if (hadInnerException != HasInnerException ())
 					Build ();
 				UpdateDisplay ();
@@ -920,7 +974,7 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 			var icon = Xwt.Drawing.Image.FromResource ("lightning-16.png");
 			var image = new Xwt.ImageView (icon).ToGtkWidget ();
 
-			var box = new HBox (false, 6);
+			var box = new HBox (false, 6) { Name = "exceptionCaughtButtonBox" };
 			var vb = new VBox ();
 			vb.PackStart (image, false, false, 0);
 			box.PackStart (vb, false, false, 0);
@@ -928,14 +982,16 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 			typeLabel = new Label {
 				Xalign = 0,
 				Selectable = true,
-				CanFocus = false
+				CanFocus = false,
+				Name = "exceptionTypeLabel"
 			};
 			vb.PackStart (typeLabel);
 			messageLabel = new Label {
 				Xalign = 0,
 				NoShowAll = true,
 				Selectable = true,
-				CanFocus = false
+				CanFocus = false,
+				Name = "exceptionMessageLabel"
 			};
 			vb.PackStart (messageLabel);
 
@@ -951,7 +1007,8 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 			vb = new VBox ();
 			var closeButton = new ImageButton {
 				InactiveImage = closeSelImage,
-				Image = closeSelOverImage
+				Image = closeSelOverImage,
+				Name = "closeExceptionCaughtButton"
 			};
 			closeButton.Clicked += delegate {
 				dlg.ShowMiniButton ();
@@ -960,13 +1017,14 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 			box.PackStart (vb, false, false, 0);
 
 			exception.Changed += delegate {
-				Application.Invoke (delegate {
+				Application.Invoke ((o, args) => {
 					LoadData ();
 				});
 			};
 			LoadData ();
 
 			var eb = new PopoverWidget ();
+			eb.Name = "exceptionCaughtPopoverWidget";
 			eb.ShowArrow = true;
 			eb.EnableAnimation = true;
 			eb.PopupPosition = PopupPosition.Left;
@@ -1017,6 +1075,7 @@ widget ""*.exception_dialog_expander"" style ""exception-dialog-expander""
 		public override Control CreateWidget ()
 		{
 			var box = new EventBox ();
+			box.Name = "exceptionCaughtMiniButtonEventBox";
 			box.VisibleWindow = false;
 			var icon = Xwt.Drawing.Image.FromResource ("lightning-16.png");
 			box.Add (new Xwt.ImageView (icon).ToGtkWidget ());

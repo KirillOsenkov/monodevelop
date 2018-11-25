@@ -26,18 +26,16 @@
 
 using System;
 using System.Collections.Generic;
-using MonoDevelop.Ide.Gui.Content;
+using System.Collections.Immutable;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using System.IO;
-using System.Linq;
-using MonoDevelop.Ide.Editor;
-using MonoDevelop.Core.Text;
-using MonoDevelop.Ide.Editor.Highlighting;
-using MonoDevelop.Ide.Editor.Extension;
 using Microsoft.CodeAnalysis;
 using MonoDevelop.CodeIssues;
-using System.Collections.Immutable;
+using MonoDevelop.Core.Text;
+using MonoDevelop.Ide.Editor;
+using MonoDevelop.Ide.Editor.Extension;
+using MonoDevelop.Ide.Editor.Highlighting;
 
 namespace MonoDevelop.AnalysisCore.Gui
 {
@@ -84,6 +82,7 @@ namespace MonoDevelop.AnalysisCore.Gui
 			while (markers.Count > 0)
 				Editor.RemoveMarker (markers.Dequeue ());
 			disposed = true;
+			base.Dispose ();
 		}
 		
 		bool enabled;
@@ -207,13 +206,13 @@ namespace MonoDevelop.AnalysisCore.Gui
 			{
 				switch (result.Level) {
 				case DiagnosticSeverity.Hidden:
-					return DefaultSourceEditorOptions.Instance.GetColorStyle ().PlainText.Background;
+					return SyntaxHighlightingService.GetColor (DefaultSourceEditorOptions.Instance.GetEditorTheme (), EditorThemeColors.Background);
 				case DiagnosticSeverity.Error:
-					return DefaultSourceEditorOptions.Instance.GetColorStyle ().UnderlineError.Color;
+					return SyntaxHighlightingService.GetColor (DefaultSourceEditorOptions.Instance.GetEditorTheme (), EditorThemeColors.UnderlineError);
 				case DiagnosticSeverity.Warning:
-					return DefaultSourceEditorOptions.Instance.GetColorStyle ().UnderlineWarning.Color;
+					return SyntaxHighlightingService.GetColor (DefaultSourceEditorOptions.Instance.GetEditorTheme (), EditorThemeColors.UnderlineWarning);
 				case DiagnosticSeverity.Info:
-					return DefaultSourceEditorOptions.Instance.GetColorStyle ().UnderlineSuggestion.Color;
+					return SyntaxHighlightingService.GetColor (DefaultSourceEditorOptions.Instance.GetEditorTheme (), EditorThemeColors.UnderlineSuggestion);
 				default:
 					throw new System.ArgumentOutOfRangeException ();
 				}
@@ -262,7 +261,7 @@ namespace MonoDevelop.AnalysisCore.Gui
 							var effect = currentResult.InspectionMark == IssueMarker.DottedLine ? TextSegmentMarkerEffect.DottedLine : TextSegmentMarkerEffect.WavedLine;
 							var marker = TextMarkerFactory.CreateGenericTextSegmentMarker (editor, effect, TextSegment.FromBounds (start, end));
 							marker.Color = GetColor (editor, currentResult);
-							marker.IsVisible = currentResult.Underline;
+							marker.IsVisible = currentResult.Underline && currentResult.Level != DiagnosticSeverity.Hidden;
 							marker.Tag = currentResult;
 							editor.AddMarker (marker);
 							ext.markers.Enqueue (marker);

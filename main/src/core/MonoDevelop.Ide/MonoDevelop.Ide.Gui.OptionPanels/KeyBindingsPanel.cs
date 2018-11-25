@@ -35,6 +35,7 @@ using MonoDevelop.Ide.Gui.Dialogs;
 using MonoDevelop.Components.Commands;
 using Gtk;
 using MonoDevelop.Components;
+using MonoDevelop.Components.AtkCocoaHelper;
 
 namespace MonoDevelop.Ide.Gui.OptionPanels
 {
@@ -66,6 +67,8 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 
 		Dictionary<string, HashSet<Command>> duplicates;
 		Dictionary<string, HashSet<Command>> conflicts;
+
+		CellRendererKeyButtons bindingRenderer;
 		
 		public KeyBindingsPanel ()
 		{
@@ -90,7 +93,7 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 			
 			bindingTVCol = new TreeViewColumn ();
 			bindingTVCol.Title = GettextCatalog.GetString ("Key Binding");
-			CellRendererKeyButtons bindingRenderer = new CellRendererKeyButtons (this);
+			bindingRenderer = new CellRendererKeyButtons (this);
 			bindingRenderer.KeyBindingSelected += BindingRenderer_KeyBindingSelected;
 			bindingTVCol.PackStart (bindingRenderer, false);
 			bindingTVCol.AddAttribute (bindingRenderer, "text", bindingCol);
@@ -132,8 +135,7 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 			searchEntry.Ready = true;
 			searchEntry.Visible = true;
 			searchEntry.Changed += delegate {
-				processedFilterTerms = searchEntry.Entry.Text.Split (new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)
-					.Select (s => s.ToLower ()).ToArray ();;
+				processedFilterTerms = searchEntry.Entry.Text.ToLower ().Split (new char [] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
 				filterChanged = true;
 				if (!filterTimeoutRunning) {
 					filterTimeoutRunning = true;
@@ -155,6 +157,26 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 			//HACK: workaround for MD Bug 608021: Stetic loses values assigned to "new" properties of custom widget
 			conflicButton.Label = GettextCatalog.GetString ("_View Conflicts");
 			conflicButton.UseUnderline = true;
+
+			SetupAccessibility ();
+		}
+
+		void SetupAccessibility ()
+		{
+			schemeCombo.Accessible.Name = "KeyBindingsPanel.schemeCombo";
+			schemeCombo.Accessible.Description = GettextCatalog.GetString ("Select a predefined keybindings scheme");
+			schemeCombo.SetAccessibilityLabelRelationship (labelScheme);
+
+			searchEntry.Entry.SetCommonAccessibilityAttributes ("KeyBindingsPanel.searchEntry", GettextCatalog.GetString ("Search"),
+																GettextCatalog.GetString ("Enter a search term to find it in the keybindings list"));
+
+			accelEntry.SetCommonAccessibilityAttributes ("KeyBindingsPanel.accelEntry", labelEditBinding,
+			                                             GettextCatalog.GetString ("Enter the keybinding for this command"));
+
+			addButton.SetCommonAccessibilityAttributes ("KeyBindingsPanel.addButton", "",
+			                                            GettextCatalog.GetString ("Add a new binding for this command"));
+			updateButton.SetCommonAccessibilityAttributes ("KeyBindingsPanel.updateButton", "",
+			                                               GettextCatalog.GetString ("Update the binding for this command"));
 		}
 
 		void Refilter ()
@@ -673,6 +695,15 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 			}
 		}
 
+		protected override void OnDestroyed()
+		{
+			if (bindingRenderer != null) {
+				bindingRenderer.KeyBindingSelected -= BindingRenderer_KeyBindingSelected;
+				bindingRenderer = null;
+			}
+			base.OnDestroyed();
+		}
+
 		struct KeyBindingHitTestResult
 		{
 			public int SelectedKey { get; set; }
@@ -768,9 +799,9 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 
 					var cmdDuplicates = keyDuplicates.Where (cmd => cmd != hit.Command);
 					if (tooltipWindow == null) {
-						tooltipWindow = new TooltipPopoverWindow ();
+						tooltipWindow = TooltipPopoverWindow.Create ();
 						tooltipWindow.ShowArrow = true;
-						tooltipWindow.LeaveNotifyEvent += delegate { HideConflictTooltip (); };
+						//tooltipWindow.LeaveNotifyEvent += delegate { HideConflictTooltip (); };
 					}
 
 					var text = string.Empty;
@@ -799,7 +830,7 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 							text += "\n\u2022 " + cmd.Category + " \u2013 " + cmd.DisplayName;
 					}
 
-					tooltipWindow.Text = text;
+					tooltipWindow.Markup = text;
 					tooltipWindow.Severity = hasConflict ? Tasks.TaskSeverity.Error : Tasks.TaskSeverity.Warning;
 
 					tooltipWindow.ShowPopup (keyBindingsTree, hit.ButtonBounds, PopupPosition.Top);
@@ -972,10 +1003,11 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 				}
 			}
 
-			public override void Destroy ()
+			protected override void OnDestroyed()
 			{
+				keyBindingsPanel = null;
 				HideConflictTooltip ();
-				base.Destroy ();
+				base.OnDestroyed();
 			}
 		}
 	}

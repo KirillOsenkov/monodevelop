@@ -27,13 +27,12 @@
 //
 
 using System.Collections.Generic;
-using NuGet;
+using System.Threading.Tasks;
 
 namespace MonoDevelop.PackageManagement
 {
 	internal interface ILicenseAcceptanceService
 	{
-		bool AcceptLicenses(IEnumerable<IPackage> packages);
-		bool AcceptLicenses (IEnumerable<NuGetPackageLicense> licenses);
+		Task<bool> AcceptLicenses (IEnumerable<NuGetPackageLicense> licenses);
 	}
 }

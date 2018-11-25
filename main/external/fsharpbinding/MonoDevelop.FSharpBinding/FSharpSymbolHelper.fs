@@ -1,7 +1,9 @@
 ﻿namespace MonoDevelop.FSharp
 open System
 open System.Collections.Generic
+open System.IO
 open System.Text
+open System.Threading
 open Microsoft.FSharp.Compiler
 open Microsoft.FSharp.Compiler.SourceCodeServices
 open Mono.TextEditor
@@ -9,6 +11,9 @@ open Mono.TextEditor.Highlighting
 open MonoDevelop.Core
 open MonoDevelop.Ide
 open MonoDevelop.Ide.CodeCompletion
+open MonoDevelop.Ide.Editor
+open MonoDevelop.Ide.Editor.Highlighting
+open MonoDevelop.Components
 open MonoDevelop.FSharp.Shared
 open ExtCore.Control
 
@@ -36,6 +41,11 @@ module Symbols =
 
         let startOffset = doc.LocationToOffset(start.Line, start.Column+1)
         let endOffset = doc.LocationToOffset(finish.Line, finish.Column+1)
+        let startOffset =
+            if startOffset = endOffset then 
+                endOffset-symbolUse.Symbol.DisplayName.Length
+            else
+                startOffset
         MonoDevelop.Core.Text.TextSegment.FromBounds(startOffset, endOffset)
 
     let getEditorDataForFileName (fileName:string) =
@@ -184,7 +194,10 @@ module SymbolUse =
         | _ -> None
 
     let inline private notCtorOrProp (symbol:FSharpMemberOrFunctionOrValue) =
-        not symbol.IsConstructor && not symbol.IsPropertyGetterMethod && not symbol.IsPropertySetterMethod
+        not symbol.IsConstructor && 
+        not symbol.IsPropertyGetterMethod && 
+        not symbol.IsPropertySetterMethod &&
+        not (symbol.LogicalName = ".ctor")
 
     let (|Method|_|) (symbolUse:FSharpSymbolUse) =
         match symbolUse with
@@ -330,32 +343,42 @@ module SymbolUse =
 //  | ToolTip of signature:string * doc:XmlDoc * footer:string
 //    ///A empty tip
 //  | EmptyTip
-
+[<AutoOpen>]
+module PrintParameter =
+    let print sb = Printf.bprintf sb "%s"
 
 [<AutoOpen>]
-module internal Highlight =
+module Highlight =
     type HighlightType =
     | Symbol | Brackets | Keyword | UserType | Number
 
-    let getColourScheme () =
-        Highlighting.SyntaxModeService.GetColorStyle (IdeApp.Preferences.ColorScheme.Value)
     let getColourPart x = round(x * 255.0) |> int
 
     let argbToHex (c : Cairo.Color) =
         sprintf "#%02X%02X%02X" (getColourPart c.R) (getColourPart c.G) (getColourPart c.B)
 
+    let getEditor() =
+        let editor = TextEditorFactory.CreateNewEditor()
+        editor.MimeType <- "text/x-fsharp"
+        let assembly = typeof<SyntaxHighlighting>.Assembly
+        use stream = assembly.GetManifestResourceStream("F#.sublime-syntax")
+        use reader = new StreamReader(stream)
+        let highlighting = Sublime3Format.ReadHighlighting(reader)
+        highlighting.PrepareMatches()
+        editor.SyntaxHighlighting <- new SyntaxHighlighting(highlighting, editor)
+        editor
+
+    let private editor =
+        Runtime.RunInMainThread getEditor
+        |> Async.AwaitTask 
+        |> Async.RunSynchronously
+
     let syntaxHighlight s =
-        let data = new TextEditorData (new TextDocument (s))
-        data.Document.SyntaxMode <- SyntaxModeService.GetSyntaxMode (data.Document, "text/x-fsharp")
-        data.ColorStyle <- getColourScheme()
-        data.GetMarkup (0, data.Length, false)
+        Runtime.RunInMainThread(fun() -> editor.Text <- s) |> Async.AwaitTask |> Async.RunSynchronously
+        let data = editor.GetContent<ITextEditorDataProvider>().GetTextEditorData()
+        data.GetMarkup(0, s.Length, false, true, false, true)
 
     let asUnderline = sprintf "_STARTUNDERLINE_%s_ENDUNDERLINE_" // we replace with real markup after highlighting
-
-[<AutoOpen>]
-module PrintParameter =
-    let print sb = Printf.bprintf sb "%s"
-
 
 module SymbolTooltips =
     let maxPadding = 20
@@ -549,7 +572,7 @@ module SymbolTooltips =
         let functionName =
             let name =
                 if func.IsConstructor then
-                    match func.EnclosingEntitySafe with
+                    match func.EnclosingEntity with
                     | Some ent -> ent.DisplayName
                     | _ ->
                         LoggingService.LogWarning(sprintf "getFuncSignatureWithFormat: No enclosing entity found for: %s" func.DisplayName)
@@ -569,7 +592,7 @@ module SymbolTooltips =
             let modifier =
                 //F# types are prefixed with new, should non F# types be too for consistancy?
                 if func.IsConstructor then
-                    match func.EnclosingEntitySafe with
+                    match func.EnclosingEntity with
                     | Some ent -> if ent.IsFSharp then "new" ++ accessibility
                                   else accessibility
                     | _ ->
@@ -622,7 +645,7 @@ module SymbolTooltips =
             | _ -> indent + name.PadRight padding + ":"
 
         let isDelegate =
-            match func.EnclosingEntitySafe with
+            match func.EnclosingEntity with
             | Some ent -> ent.IsDelegate
             | _ ->
                 LoggingService.logWarning "getFuncSignatureWithFormat: No enclosing entity found for: %s" func.DisplayName
@@ -710,12 +733,9 @@ module SymbolTooltips =
             let basicName = modifier + typeName ++ name
 
             if fse.IsFSharpAbbreviation then
-                let unannotatedType = fse.UnAnnotate()
-                basicName ++ "=" ++ (unannotatedType.DisplayName)
+                basicName ++ "=" ++ (fse.AbbreviatedType.Format displayContext)
             else
                 basicName
-
-        
 
         if fse.IsFSharpUnion then typeDisplay + uniontip ()
         elif fse.IsEnum then typeDisplay + enumtip ()
@@ -757,8 +777,9 @@ module SymbolTooltips =
     let returnType (symbol:FSharpSymbolUse) =
         match symbol with
         | MemberFunctionOrValue m ->
-            Some m.ReturnParameter.Type
-        //| Entity c ->
+            try
+                Some m.ReturnParameter.Type
+            with _ -> None
         | _ -> None
 
     let footerForType (entity:FSharpSymbolUse) =
@@ -809,7 +830,7 @@ module SymbolTooltips =
                 None
 
         | Constructor func ->
-            match func.EnclosingEntitySafe with
+            match func.EnclosingEntity with
             | Some ent when ent.IsValueType || ent.IsEnum ->
                   //ValueTypes
                   let signature = getFuncSignature symbol.DisplayContext func

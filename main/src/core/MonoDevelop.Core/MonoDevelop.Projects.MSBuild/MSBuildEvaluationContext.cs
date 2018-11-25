@@ -1,4 +1,4 @@
-//
+﻿//
 // MSBuildEvaluationContext.cs
 //
 // Author:
@@ -30,15 +30,14 @@ using System.IO;
 using System.Collections.Generic;
 using System.Xml;
 using System.Text;
-
-using Microsoft.Build.BuildEngine;
 using MonoDevelop.Core;
 using System.Reflection;
 using Microsoft.Build.Utilities;
 using MonoDevelop.Projects.MSBuild.Conditions;
 using System.Globalization;
 using Microsoft.Build.Evaluation;
-using System.Web.UI.WebControls;
+using MonoDevelop.Projects.Extensions;
+using System.Collections;
 
 namespace MonoDevelop.Projects.MSBuild
 {
@@ -46,8 +45,10 @@ namespace MonoDevelop.Projects.MSBuild
 	{
 		Dictionary<string,string> properties = new Dictionary<string, string> (StringComparer.OrdinalIgnoreCase);
 		static Dictionary<string, string> envVars = new Dictionary<string, string> ();
-		HashSet<string> propertiesWithTransforms = new HashSet<string> ();
-		List<string> propertiesWithTransformsSorted = new List<string> ();
+		readonly HashSet<string> propertiesWithTransforms = new HashSet<string> (StringComparer.OrdinalIgnoreCase);
+		readonly List<string> propertiesWithTransformsSorted = new List<string> ();
+		List<ImportSearchPathExtensionNode> searchPaths;
+
 		public Dictionary<string, bool> ExistsEvaluationCache { get; } = new Dictionary<string, bool> ();
 
 		bool allResolved;
@@ -56,13 +57,14 @@ namespace MonoDevelop.Projects.MSBuild
 		IMSBuildPropertyGroupEvaluated itemMetadata;
 		string directoryName;
 
+		string itemInclude;
 		string itemFile;
 		string recursiveDir;
 
+		public MSBuildEngineLogger Log { get; set; }
+
 		public MSBuildEvaluationContext ()
 		{
-			propertiesWithTransforms = new HashSet<string> ();
-			propertiesWithTransformsSorted = new List<string> ();
 		}
 
 		public MSBuildEvaluationContext (MSBuildEvaluationContext parentContext)
@@ -71,6 +73,8 @@ namespace MonoDevelop.Projects.MSBuild
 			this.project = parentContext.project;
 			this.propertiesWithTransforms = parentContext.propertiesWithTransforms;
 			this.propertiesWithTransformsSorted = parentContext.propertiesWithTransformsSorted;
+			this.ExistsEvaluationCache = parentContext.ExistsEvaluationCache;
+			this.Log = parentContext.Log;
 		}
 
 		internal void InitEvaluation (MSBuildProject project)
@@ -95,81 +99,127 @@ namespace MonoDevelop.Projects.MSBuild
 				properties.Add ("MSBuildProjectDefaultTargets", project.DefaultTargets);
 				properties.Add ("MSBuildProjectExtension", Path.GetExtension (project.FileName));
 				properties.Add ("MSBuildProjectFile", project.FileName.FileName);
-				properties.Add ("MSBuildProjectFullPath", MSBuildProjectService.ToMSBuildPath (null, project.FileName.FullPath.ToString()));
+				properties.Add ("MSBuildProjectFullPath", MSBuildProjectService.ToMSBuildPath (null, project.FileName.FullPath.ToString ()));
 				properties.Add ("MSBuildProjectName", project.FileName.FileNameWithoutExtension);
 
-				dir = project.BaseDirectory.IsNullOrEmpty ? Environment.CurrentDirectory : project.BaseDirectory.ToString();
+				dir = project.BaseDirectory.IsNullOrEmpty ? Environment.CurrentDirectory : project.BaseDirectory.ToString ();
 				properties.Add ("MSBuildProjectDirectory", MSBuildProjectService.ToMSBuildPath (null, dir));
 				properties.Add ("MSBuildProjectDirectoryNoRoot", MSBuildProjectService.ToMSBuildPath (null, dir.Substring (Path.GetPathRoot (dir).Length)));
 
-				// This MSBuild loader is v15.0
-				string toolsVersion = "15.0";
-				properties.Add ("MSBuildAssemblyVersion", "15.0");
+				InitEngineProperties (project.TargetRuntime ?? Runtime.SystemAssemblyService.DefaultRuntime, properties, out searchPaths);
+			}
+		}
 
-				var toolsPath = Runtime.SystemAssemblyService.DefaultRuntime.GetMSBuildToolsPath (toolsVersion);
+		static void InitEngineProperties (Core.Assemblies.TargetRuntime runtime, Dictionary<string, string> properties, out List<ImportSearchPathExtensionNode> searchPaths)
+		{
+			// This MSBuild loader is v15.0
+			string toolsVersion = "15.0";
+			properties.Add ("MSBuildAssemblyVersion", toolsVersion);
 
-				var frameworkToolsPath = ToolLocationHelper.GetPathToDotNetFramework (TargetDotNetFrameworkVersion.VersionLatest);
+			//VisualStudioVersion is a property set by MSBuild itself
+			string visualStudioVersion = toolsVersion;
+			properties.Add ("VisualStudioVersion", visualStudioVersion);
 
-				properties.Add ("MSBuildBinPath", MSBuildProjectService.ToMSBuildPath (null, toolsPath));
-				properties.Add ("MSBuildToolsPath", MSBuildProjectService.ToMSBuildPath (null, toolsPath));
-				properties.Add ("MSBuildToolsRoot", MSBuildProjectService.ToMSBuildPath (null, Path.GetDirectoryName (toolsPath)));
-				properties.Add ("MSBuildToolsVersion", toolsVersion);
-				properties.Add ("OS", Platform.IsWindows ? "Windows_NT" : "Unix");
+			var toolsPath = (runtime).GetMSBuildToolsPath (toolsVersion);
 
-				properties.Add ("MSBuildBinPath32", MSBuildProjectService.ToMSBuildPath (null, toolsPath));
+			var msBuildBinPath = toolsPath;
+			var msBuildBinPathEscaped = MSBuildProjectService.ToMSBuildPath (null, msBuildBinPath);
+			properties.Add ("MSBuildBinPath", msBuildBinPathEscaped);
+			properties.Add ("MSBuildToolsPath", msBuildBinPathEscaped);
+			properties.Add ("MSBuildBinPath32", msBuildBinPathEscaped);
 
-				properties.Add ("MSBuildFrameworkToolsPath", MSBuildProjectService.ToMSBuildPath (null, frameworkToolsPath));
-				properties.Add ("MSBuildFrameworkToolsPath32", MSBuildProjectService.ToMSBuildPath (null, frameworkToolsPath));
+			properties.Add ("MSBuildToolsRoot", MSBuildProjectService.ToMSBuildPath (null, Path.GetDirectoryName (toolsPath)));
+			properties.Add ("MSBuildToolsVersion", toolsVersion);
+			properties.Add ("OS", Platform.IsWindows ? "Windows_NT" : "Unix");
 
-				if (Platform.IsWindows) {
-					// Taken from MSBuild source:
-					var programFiles = Environment.GetFolderPath (Environment.SpecialFolder.ProgramFiles);
-					var programFiles32 = Environment.GetFolderPath (Environment.SpecialFolder.ProgramFilesX86);
-					if (string.IsNullOrEmpty(programFiles32))
-						programFiles32 = programFiles; // 32 bit box
-					
-					string programFiles64;
-					if (programFiles == programFiles32) {
-						// either we're in a 32-bit window, or we're on a 32-bit machine.  
-						// if we're on a 32-bit machine, ProgramW6432 won't exist
-						// if we're on a 64-bit machine, ProgramW6432 will point to the correct Program Files. 
-						programFiles64 = Environment.GetEnvironmentVariable("ProgramW6432");
-					}
-					else {
-						// 64-bit window on a 64-bit machine; %ProgramFiles% points to the 64-bit 
-						// Program Files already. 
-						programFiles64 = programFiles;
-					}
+			var frameworkToolsPath = ToolLocationHelper.GetPathToDotNetFramework (TargetDotNetFrameworkVersion.VersionLatest);
+			var frameworkToolsPathEscaped = MSBuildProjectService.ToMSBuildPath (null, frameworkToolsPath);
+			properties.Add ("MSBuildFrameworkToolsPath", frameworkToolsPathEscaped);
+			properties.Add ("MSBuildFrameworkToolsPath32", frameworkToolsPathEscaped);
 
-					var extensionsPath32 = MSBuildProjectService.ToMSBuildPath (null, Path.Combine (programFiles32, "MSBuild"));
-					properties.Add ("MSBuildExtensionsPath32", extensionsPath32);
+			searchPaths = MSBuildProjectService.GetProjectImportSearchPaths (runtime, true).ToList ();
 
-					if (programFiles64 != null)
-						properties.Add ("MSBuildExtensionsPath64", MSBuildProjectService.ToMSBuildPath (null, Path.Combine(programFiles64, "MSBuild")));
-					
-					// MSBuildExtensionsPath:  The way this used to work is that it would point to "Program Files\MSBuild" on both 
-					// 32-bit and 64-bit machines.  We have a switch to continue using that behavior; however the default is now for
-					// MSBuildExtensionsPath to always point to the same location as MSBuildExtensionsPath32. 
+			if (Platform.IsWindows) {
+				//first use extensions path relative to bindir (MSBuild/15.0/Bin). this works for dev15 isolated install.
+				var msBuildExtensionsPath = Path.GetFullPath (Path.Combine (msBuildBinPath, "..", ".."));
+				var msBuildExtensionsPathEscaped = MSBuildProjectService.ToMSBuildPath (null, msBuildExtensionsPath);
+				properties.Add ("MSBuildExtensionsPath", msBuildExtensionsPathEscaped);
+				properties.Add ("MSBuildExtensionsPath32", msBuildExtensionsPathEscaped);
+				properties.Add ("MSBuildExtensionsPath64", msBuildExtensionsPathEscaped);
 
-					bool useLegacyMSBuildExtensionsPathBehavior = !String.IsNullOrEmpty(Environment.GetEnvironmentVariable("MSBUILDLEGACYEXTENSIONSPATH"));
+				var vsToolsPathEscaped = MSBuildProjectService.ToMSBuildPath (null, Path.Combine (msBuildExtensionsPath, "Microsoft", "VisualStudio", "v" + visualStudioVersion));
+				properties.Add ("VSToolsPath", vsToolsPathEscaped);
 
-					string extensionsPath;
-					if (useLegacyMSBuildExtensionsPathBehavior)
-						extensionsPath = Path.Combine (programFiles, "MSBuild");
-					else
-						extensionsPath = extensionsPath32;
-					properties.Add ("MSBuildExtensionsPath", extensionsPath);
+				//like the dev15 toolset, add fallbacks to the old global paths
+
+				// Taken from MSBuild source:
+				var programFiles = Environment.GetFolderPath (Environment.SpecialFolder.ProgramFiles);
+				var programFiles32 = Environment.GetFolderPath (Environment.SpecialFolder.ProgramFilesX86);
+				if (string.IsNullOrEmpty (programFiles32))
+					programFiles32 = programFiles; // 32 bit box
+
+				string programFiles64;
+				if (programFiles == programFiles32) {
+					// either we're in a 32-bit window, or we're on a 32-bit machine.  
+					// if we're on a 32-bit machine, ProgramW6432 won't exist
+					// if we're on a 64-bit machine, ProgramW6432 will point to the correct Program Files. 
+					programFiles64 = Environment.GetEnvironmentVariable ("ProgramW6432");
 				}
-				else if (!String.IsNullOrEmpty (DefaultExtensionsPath)) {
-					var ep = MSBuildProjectService.ToMSBuildPath (null, extensionsPath);
-					properties.Add ("MSBuildExtensionsPath", ep);
-					properties.Add ("MSBuildExtensionsPath32", ep);
-					properties.Add ("MSBuildExtensionsPath64", ep);
+				else {
+					// 64-bit window on a 64-bit machine; %ProgramFiles% points to the 64-bit 
+					// Program Files already. 
+					programFiles64 = programFiles;
 				}
 
-				// Environment
+				var extensionsPath32Escaped = MSBuildProjectService.ToMSBuildPath (null, Path.Combine (programFiles32, "MSBuild"));
+				searchPaths.Insert (0, new ImportSearchPathExtensionNode { Property = "MSBuildExtensionsPath32", Path = extensionsPath32Escaped });
 
-				properties.Add ("MSBuildProgramFiles32", MSBuildProjectService.ToMSBuildPath (null, Environment.GetFolderPath (Environment.SpecialFolder.ProgramFilesX86)));
+				if (programFiles64 != null) {
+					var extensionsPath64Escaped = MSBuildProjectService.ToMSBuildPath (null, Path.Combine (programFiles64, "MSBuild"));
+					searchPaths.Insert (0, new ImportSearchPathExtensionNode { Property = "MSBuildExtensionsPath64", Path = extensionsPath64Escaped });
+				}
+
+				//yes, dev15's toolset has the 64-bit path fall back to the 32-bit one
+				searchPaths.Insert (0, new ImportSearchPathExtensionNode { Property = "MSBuildExtensionsPath64", Path = extensionsPath32Escaped });
+
+				// MSBuildExtensionsPath:  The way this used to work is that it would point to "Program Files\MSBuild" on both 
+				// 32-bit and 64-bit machines.  We have a switch to continue using that behavior; however the default is now for
+				// MSBuildExtensionsPath to always point to the same location as MSBuildExtensionsPath32. 
+
+				bool useLegacyMSBuildExtensionsPathBehavior = !string.IsNullOrEmpty (Environment.GetEnvironmentVariable ("MSBUILDLEGACYEXTENSIONSPATH"));
+
+				string extensionsPath;
+				if (useLegacyMSBuildExtensionsPathBehavior)
+					extensionsPath = Path.Combine (programFiles, "MSBuild");
+				else
+					extensionsPath = extensionsPath32Escaped;
+				searchPaths.Insert (0, new ImportSearchPathExtensionNode { Property = "MSBuildExtensionsPath", Path = extensionsPath });
+			}
+			else {
+				var msBuildExtensionsPath = runtime.GetMSBuildExtensionsPath ();
+				var msBuildExtensionsPathEscaped = MSBuildProjectService.ToMSBuildPath (null, msBuildExtensionsPath);
+				properties.Add ("MSBuildExtensionsPath", msBuildExtensionsPathEscaped);
+				properties.Add ("MSBuildExtensionsPath32", msBuildExtensionsPathEscaped);
+				properties.Add ("MSBuildExtensionsPath64", msBuildExtensionsPathEscaped);
+
+				var vsToolsPathEscaped = MSBuildProjectService.ToMSBuildPath (null, Path.Combine (msBuildExtensionsPath, "Microsoft", "VisualStudio", "v" + visualStudioVersion));
+				properties.Add ("VSToolsPath", vsToolsPathEscaped);
+			}
+
+			// Environment
+
+			properties.Add ("MSBuildProgramFiles32", MSBuildProjectService.ToMSBuildPath (null, Environment.GetFolderPath (Environment.SpecialFolder.ProgramFilesX86)));
+
+			// Custom override of MSBuildExtensionsPath using an env var
+
+			var customExtensionsPath = Environment.GetEnvironmentVariable ("MSBuildExtensionsPath");
+			if (!string.IsNullOrEmpty (customExtensionsPath)) {
+				if (IsExternalMSBuildExtensionsPath (customExtensionsPath))
+					// This is actually an override of the mono extensions path. Don't replace the default MSBuildExtensionsPath value since
+					// core targets still need to be loaded from there.
+					searchPaths.Insert (0, new ImportSearchPathExtensionNode { Property = "MSBuildExtensionsPath", Path = customExtensionsPath });
+				else
+					properties["MSBuildExtensionsPath"] = MSBuildProjectService.ToMSBuildPath (null, customExtensionsPath);
 			}
 		}
 
@@ -177,45 +227,35 @@ namespace MonoDevelop.Projects.MSBuild
 			get { return project; }
 		}
 
-		static string extensionsPath;
-
-		internal static string DefaultExtensionsPath {
-			get {
-				if (extensionsPath == null)
-					extensionsPath = Environment.GetEnvironmentVariable ("MSBuildExtensionsPath");
-
-				if (extensionsPath == null) {
-					// NOTE: code from mcs/tools/gacutil/driver.cs
-					PropertyInfo gac = typeof (System.Environment).GetProperty (
-						"GacPath", BindingFlags.Static | BindingFlags.NonPublic);
-
-					if (gac != null) {
-						MethodInfo get_gac = gac.GetGetMethod (true);
-						string gac_path = (string) get_gac.Invoke (null, null);
-						extensionsPath = Path.GetFullPath (Path.Combine (
-							gac_path, Path.Combine ("..", "xbuild")));
-					}
-				}
-				return extensionsPath;
-			}
+		public IEnumerable<ImportSearchPathExtensionNode> GetProjectImportSearchPaths ()
+		{
+			if (parentContext != null)
+				return parentContext.GetProjectImportSearchPaths ();
+			return searchPaths;
 		}
 
-		static string DotConfigExtensionsPath = Path.Combine (Environment.GetFolderPath (Environment.SpecialFolder.ApplicationData), Path.Combine ("xbuild", "tasks"));
-		const string MacOSXExternalXBuildDir = "/Library/Frameworks/Mono.framework/External/xbuild";
-
-		internal static IEnumerable<string> GetApplicableExtensionsPaths ()
+		static bool IsExternalMSBuildExtensionsPath (string path)
 		{
-			// On windows there is a single extension path, which is already properly defined in the engine
-			if (Platform.IsWindows)
-				yield return null;
-			if (Platform.IsMac)
-				yield return MacOSXExternalXBuildDir;
-			yield return DotConfigExtensionsPath;
-			yield return DefaultExtensionsPath;
+			// Mono has a hack to allow loading msbuild targets from different locations. Besides the default location
+			// inside Mono, targets are also loaded from /Library/Frameworks/Mono.framework/External/xbuild.
+			// When evaluating an msbuild project, MSBuildExtensionsPath is replaced by those locations.
+
+			// This check is a workaround for a special corner case that happens, for example, when building the Xamarin SDKs.
+			// In that case, the MSBuildExtensionsPath env var is specified to point to a local version of the msbuild targets
+			// that are usually installed in /Library/Frameworks/Mono.framework/External/xbuild.
+			// However, by setting this variable, the new value replaces the default build target location, and msbuild
+			// can't finde Microsoft.Common.props.
+
+			// This check is done to avoid overwriting the default msbuild builds target location when what is being
+			// specified in MSBuildExtensionsPath is actually a path that intends to replace the external build
+			// targets path.
+
+			return Platform.IsMac && path.Contains ("Mono.framework/External/xbuild");
 		}
 
-		internal void SetItemContext (string itemFile, string recursiveDir, IMSBuildPropertyGroupEvaluated metadata = null)
+		internal void SetItemContext (string itemInclude, string itemFile, string recursiveDir, IMSBuildPropertyGroupEvaluated metadata = null)
 		{
+			this.itemInclude = itemInclude;
 			this.itemFile = itemFile;
 			this.recursiveDir = recursiveDir;
 			this.itemMetadata = metadata;
@@ -223,6 +263,7 @@ namespace MonoDevelop.Projects.MSBuild
 
 		internal void ClearItemContext ()
 		{
+			this.itemInclude = null;
 			this.itemFile = null;
 			this.recursiveDir = null;
 			this.itemMetadata = null;
@@ -246,6 +287,14 @@ namespace MonoDevelop.Projects.MSBuild
 
 		public string GetMetadataValue (string name)
 		{
+			// First of all check if the metadata is explicitly set
+			if (itemMetadata != null && itemMetadata.HasProperty (name))
+				return itemMetadata.GetValue (name, "");
+
+			// Now check for file metadata. We avoid a FromMSBuildPath call by checking after item metadata
+			if (itemFile == null && itemInclude != null)
+				itemFile = MSBuildProjectService.FromMSBuildPath (project.BaseDirectory, itemInclude);
+			
 			if (itemFile == null)
 				return "";
 
@@ -280,8 +329,6 @@ namespace MonoDevelop.Projects.MSBuild
 						return File.GetLastAccessTime (itemFile).ToString ("yyyy-MM-dd hh:mm:ss");
 					}
 				}
-				if (itemMetadata != null)
-					return itemMetadata.GetValue (name, "");
 			} catch (Exception ex) {
 				LoggingService.LogError ("Failure in MSBuild file", ex);
 				return "";
@@ -309,6 +356,14 @@ namespace MonoDevelop.Projects.MSBuild
 				parentContext.SetPropertyValue (name, value);
 			else
 				properties [name] = value;
+			if (Log != null)
+				LogPropertySet (name, value);
+		}
+
+		public void SetContextualPropertyValue (string name, string value)
+		{
+			// Sets a properly value only for the scope of this context, not for the scope of the global evaluation operation
+			properties [name] = value;
 		}
 
 		public void ClearPropertyValue (string name)
@@ -403,7 +458,7 @@ namespace MonoDevelop.Projects.MSBuild
 				while (i != -1);
 
 				sb.Append (str, last, str.Length - last);
-				return sb.ToString ();
+				return StringInternPool.AddShared (sb);
 			} finally {
 				evaluationSbs.Enqueue (sb);
 			}
@@ -443,12 +498,12 @@ namespace MonoDevelop.Projects.MSBuild
 			i += 2;
 			int j = FindClosingChar (str, i, ')');
 			if (j == -1) {
-				val = str.Substring (start);
+				val = StringInternPool.AddShared (str, start, str.Length - start);
 				i = str.Length;
 				return false;
 			}
 
-			string prop = str.Substring (i, j - i).Trim ();
+			string prop = StringInternPool.AddShared (str, i, j - i).Trim ();
 			i = j + 1;
 
 			bool res = false;
@@ -472,7 +527,8 @@ namespace MonoDevelop.Projects.MSBuild
 				}
 			}
 			if (!res)
-				val = str.Substring (start, j - start + 1);
+				val = StringInternPool.AddShared (str, start, j - start + 1);
+
 			return res;
 		}
 
@@ -480,6 +536,8 @@ namespace MonoDevelop.Projects.MSBuild
 		{
 			return ob != null ? Convert.ToString (ob, CultureInfo.InvariantCulture) : string.Empty;
 		}
+
+		static char [] dotOrBracket = { '.', '[' };
 
 		bool EvaluateProperty (string prop, bool ignorePropsWithTransforms, out object val, out bool needsItemEvaluation)
 		{
@@ -498,7 +556,9 @@ namespace MonoDevelop.Projects.MSBuild
 				i += 3;
 				return EvaluateMember (type, null, prop, i, out val);
 			}
-			int n = prop.IndexOf ('.');
+
+			int n = prop.IndexOfAny (dotOrBracket);
+
 			if (n == -1) {
 				needsItemEvaluation |= (!ignorePropsWithTransforms && propertiesWithTransforms.Contains (prop));
 				val = GetPropertyValue (prop) ?? string.Empty;
@@ -506,8 +566,23 @@ namespace MonoDevelop.Projects.MSBuild
 			} else {
 				var pn = prop.Substring (0, n);
 				val = GetPropertyValue (pn) ?? string.Empty;
-				return EvaluateMember (typeof(string), val, prop, n + 1, out val);
+				return EvaluateMemberOrIndexer (typeof (string), val, prop, n, out val);
 			}
+		}
+
+		bool EvaluateMemberOrIndexer (Type type, object instance, string str, int i, out object val)
+		{
+			// Position in string is either a '.' or a '['.
+
+			val = null;
+			if (i >= str.Length)
+				return false;
+			if (str [i] == '.') {
+				return EvaluateMember (type, instance, str, i + 1, out val);
+			} else if (str [i] == '[') {
+				return EvaluateIndexer (type, instance, str, i, out val);
+			}
+			return false;
 		}
 
 		internal bool EvaluateMember (Type type, object instance, string str, int i, out object val)
@@ -554,11 +629,37 @@ namespace MonoDevelop.Projects.MSBuild
 					return false;
 				}
 			}
-			if (j < str.Length && str[j] == '.') {
+			if (j < str.Length) {
 				// Chained member invocation
 				if (val == null)
 					return false;
-				return EvaluateMember (val.GetType (), val, str, j + 1, out val);
+				return EvaluateMemberOrIndexer (val.GetType (), val, str, j, out val);
+			}
+			return true;
+		}
+
+		bool EvaluateIndexer (Type type, object instance, string str, int i, out object val)
+		{
+			val = null;
+			object [] parameters;
+			i++;
+			if (!EvaluateParameters (str, ref i, out parameters))
+				return false;
+			if (parameters.Length != 1)
+				return false;
+			
+			var index = Convert.ToInt32 (parameters [0]);
+			if (instance is string) {
+				val = ((string)instance) [index];
+			}
+			else if (instance is IList array) {
+				val = array[index];
+			} else
+				return false;
+
+			if (++i < str.Length) {
+				// Chained member invocation
+				return EvaluateMemberOrIndexer (val.GetType (), val, str, i, out val);
 			}
 			return true;
 		}
@@ -594,6 +695,13 @@ namespace MonoDevelop.Projects.MSBuild
 					numArgs--;
 				}
 
+				if (method.DeclaringType == typeof (IntrinsicFunctions) && method.Name == nameof (IntrinsicFunctions.GetPathOfFileAbove) && parameterValues.Length == methodParams.Length - 1) {
+					string startingDirectory = String.IsNullOrWhiteSpace (FullFileName) ? String.Empty : Path.GetDirectoryName (FullFileName);
+					var last = convertedArgs.Length - 1;
+					convertedArgs [last] = ConvertArg (method, last, startingDirectory, methodParams [last].ParameterType);
+					numArgs = 1;
+				}
+
 				int n;
 				for (n = 0; n < numArgs; n++)
 					convertedArgs [n] = ConvertArg (method, n, parameterValues [n], methodParams [n].ParameterType);
@@ -615,9 +723,9 @@ namespace MonoDevelop.Projects.MSBuild
 				}
 
 				if (paramsArgType != null) {
-					var argsArray = new object [parameterValues.Length - numArgs];
+					var argsArray = Array.CreateInstance (paramsArgType, parameterValues.Length - numArgs);
 					for (int m = 0; m < argsArray.Length; m++)
-						argsArray [m] = ConvertArg (method, n, parameterValues [n++], paramsArgType);
+						argsArray.SetValue (ConvertArg (method, n, parameterValues [n++], paramsArgType), m);
 					convertedArgs [convertedArgs.Length - 1] = argsArray;
 				}
 
@@ -630,19 +738,21 @@ namespace MonoDevelop.Projects.MSBuild
 			return true;
 		}
 
+		static char[] parameterCloseChars = new[] { ',', ')', ']' };
 		internal bool EvaluateParameters (string str, ref int i, out object[] parameters)
 		{
 			parameters = null;
 			var list = new List<object> ();
 
 			while (i < str.Length) {
-				var j = FindClosingChar (str, i, new [] { ',', ')' });
+				var j = FindClosingChar (str, i, parameterCloseChars);
 				if (j == -1)
 					return false;
-				
+
+				var foundListEnd = str [j] == ')' || str [j] == ']';
 				var arg = str.Substring (i, j - i).Trim ();
 
-				if (arg.Length == 0 && str [j] == ')' && list.Count == 0) {
+				if (arg.Length == 0 && foundListEnd && list.Count == 0) {
 					// Empty parameters list
 					parameters = new object [0];
 					i = j;
@@ -655,7 +765,7 @@ namespace MonoDevelop.Projects.MSBuild
 
 				list.Add (Evaluate (arg));
 
-				if (str [j] == ')') {
+				if (foundListEnd) {
 					// End of parameters list
 					parameters = list.ToArray ();
 					i = j;
@@ -681,8 +791,11 @@ namespace MonoDevelop.Projects.MSBuild
 					methodWithParams = m;
 					continue;
 				}
-				if (args.Length != argInfo.Length)
-					continue;
+				if (args.Length != argInfo.Length) {
+					if (args.Length == argInfo.Length - 1 && m.DeclaringType != typeof (IntrinsicFunctions) || m.Name != nameof(IntrinsicFunctions.GetPathOfFileAbove)) {
+						continue;
+					}
+				}
 
 				bool isValid = true;
 				for (int n = 0; n < args.Length; n++) {
@@ -725,6 +838,15 @@ namespace MonoDevelop.Projects.MSBuild
 
 			if (sval != null && parameterType == typeof (char[]))
 				return sval.ToCharArray ();
+
+			if (sval != null && parameterType.IsEnum) {
+				var enumValue = sval;
+				if (enumValue.StartsWith (parameterType.Name))
+					enumValue = enumValue.Substring (parameterType.Name.Length + 1);
+				if (enumValue.StartsWith (parameterType.FullName))
+					enumValue = enumValue.Substring (parameterType.FullName.Length + 1);
+				return Enum.Parse(parameterType, enumValue, ignoreCase: true);
+			}
 
 			if (sval != null && Path.DirectorySeparatorChar != '\\')
 				value = sval.Replace ('\\', Path.DirectorySeparatorChar);
@@ -790,7 +912,7 @@ namespace MonoDevelop.Projects.MSBuild
 			} else
 				flags |= BindingFlags.NonPublic;
 			
-			return type.GetMember (memberName, flags | BindingFlags.Public);
+			return type.GetMember (memberName, flags | BindingFlags.Public | BindingFlags.IgnoreCase);
 		}
 
 		static Tuple<Type, string []> [] supportedTypeMembers = {
@@ -874,7 +996,7 @@ namespace MonoDevelop.Projects.MSBuild
 			int pc = 0;
 			while (i < str.Length) {
 				var c = str [i];
-				if (pc == 0 && closeChar.Contains (c))
+				if (pc == 0 && Array.IndexOf (closeChar, c) != -1)
 					return i;
 				if (c == '(' || c == '[')
 					pc++;
@@ -889,6 +1011,8 @@ namespace MonoDevelop.Projects.MSBuild
 			}
 			return -1;
 		}
+
+		public string CustomFullDirectoryName { get; set; }
 
 		#region IExpressionContext implementation
 
@@ -905,6 +1029,8 @@ namespace MonoDevelop.Projects.MSBuild
 
 		public string FullDirectoryName {
 			get {
+				if (CustomFullDirectoryName != null)
+					return CustomFullDirectoryName;
 				if (FullFileName == String.Empty)
 					return null;
 				if (directoryName == null)
@@ -915,5 +1041,24 @@ namespace MonoDevelop.Projects.MSBuild
 		}
 
 		#endregion
+
+		void LogPropertySet (string key, string value)
+		{
+			if (Log.Flags.HasFlag (MSBuildLogFlags.Properties))
+				Log.LogMessage ($"Set Property: {key} = {value}");
+		}
+
+		public void Dump ()
+		{
+			var allProps = new HashSet<string> ();
+
+			MSBuildEvaluationContext ctx = this;
+			while (ctx != null) {
+				allProps.UnionWith (ctx.properties.Select (p => p.Key));
+				ctx = ctx.parentContext;
+			}
+			foreach (var v in allProps.OrderBy (s => s))
+				Log.LogMessage (string.Format ($"{v,-30} = {GetPropertyValue (v)}"));
+		}
 	}
 }

@@ -16,6 +16,7 @@ module FixtureSetup =
             //Environment.SetEnvironmentVariable ("MONO_ADDINS_REGISTRY", "/tmp")
             //Environment.SetEnvironmentVariable ("XDG_CONFIG_HOME", "/tmp")
             MonoDevelop.FSharp.MDLanguageService.DisableVirtualFileSystem()
+            Xwt.Application.Initialize (Xwt.ToolkitType.Gtk)
             Runtime.Initialize (true)
             MonoDevelop.Ide.DesktopService.Initialize()
 
@@ -28,7 +29,7 @@ module TestHelpers =
         async {
             try
                 let checker = FSharpChecker.Create()
-                let! projOptions = checker.GetProjectOptionsFromScript(filename, source)
+                let! projOptions, _errors = checker.GetProjectOptionsFromScript(filename, source)
                 let! parseResults, checkAnswer = checker.ParseAndCheckFileInProject(filename, 0, source , projOptions)
 
                 // Construct new typed parse result if the task succeeded
@@ -38,7 +39,8 @@ module TestHelpers =
                       ParseAndCheckResults(Some checkResults, Some parseResults)
                   | FSharpCheckFileAnswer.Aborted ->
                       ParseAndCheckResults(None, Some parseResults)
-
+                if parseResults.Errors.Length > 0 then
+                    printfn "%A" parseResults.Errors
                 return results
             with exn ->
                 printf "%A" exn
@@ -48,6 +50,8 @@ module TestHelpers =
         FixtureSetup.initialiseMonoDevelop()
 
         let results = parseFile source
+
+        results.CheckResults |> Option.iter(fun r -> if r.Errors.Length > 0 then printfn "%A" r.Errors)
         let options = ParseOptions(FileName = filename, Content = StringTextSource(source))
 
         let parsedDocument =

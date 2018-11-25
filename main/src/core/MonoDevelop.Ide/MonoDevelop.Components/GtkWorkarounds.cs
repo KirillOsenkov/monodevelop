@@ -1,4 +1,4 @@
-//
+﻿//
 // GtkWorkarounds.cs
 //
 // Authors: Jeffrey Stedfast <jeff@xamarin.com>
@@ -1120,6 +1120,7 @@ namespace MonoDevelop.Components
 			} catch (DllNotFoundException) {
 			} catch (EntryPointNotFoundException) {
 			}
+			canSetOverlayScrollbarPolicy = false;
 		}
 
 		public static void GetOverlayScrollbarPolicy (Gtk.ScrolledWindow sw, out Gtk.PolicyType hpolicy, out Gtk.PolicyType vpolicy)
@@ -1173,8 +1174,21 @@ namespace MonoDevelop.Components
 		[DllImport (PangoUtil.LIBGOBJECT, CallingConvention = CallingConvention.Cdecl)]
 		static extern IntPtr g_object_get_data (IntPtr source, string name);
 
+		[DllImport (PangoUtil.LIBGOBJECT, CallingConvention = CallingConvention.Cdecl)]
+		static extern void g_object_set_data (IntPtr source, string name, IntPtr dataHandle);
+
 		[DllImport (PangoUtil.LIBGTK, CallingConvention = CallingConvention.Cdecl)]
 		static extern IntPtr gtk_icon_set_render_icon_scaled (IntPtr handle, IntPtr style, int direction, int state, int size, IntPtr widget, IntPtr intPtr, ref double scale);
+
+		public static IntPtr GetData (GLib.Object o, string name)
+		{
+			return g_object_get_data (o.Handle, name);
+		}
+
+		public static void SetData (GLib.Object o, string name, IntPtr dataHandle)
+		{
+			g_object_set_data (o.Handle, name, dataHandle);
+		}
 
 		public static bool SetSourceScale (Gtk.IconSource source, double scale)
 		{
@@ -1316,6 +1330,9 @@ namespace MonoDevelop.Components
 				buffer.Clear ();
 				var mark = buffer.CreateMark (null, iter, false);
 				var attrIter = attrList.Iterator;
+				//HACK: the parsed attribute indexes are byte based and need to be converted
+				//      to char indexes. Otherwise they won't match multibyte characters.
+				var indexer = new TextIndexer (text);
 
 				do {
 					int start, end;
@@ -1323,14 +1340,19 @@ namespace MonoDevelop.Components
 					attrIter.Range (out start, out end);
 
 					if (end == int.MaxValue) // last chunk
-						end = text.Length - 1;
+						end = indexer.IndexToByteIndex (text.Length - 1);
 					if (end <= start)
 						break;
 
+					start = indexer.ByteIndexToIndex (start);
+					end = indexer.ByteIndexToIndex (end);
+
 					TextTag tag;
 					if (attrIter.GetTagForAttributes (null, out tag)) {
-						buffer.TagTable.Add (tag);
-						buffer.InsertWithTags (ref iter, text.Substring (start, end - start), tag);
+						using (tag) {
+							buffer.TagTable.Add (tag);
+							buffer.InsertWithTags (ref iter, text.Substring (start, end - start), tag);
+						}
 					} else
 						buffer.Insert (ref iter, text.Substring (start, end - start));
 
@@ -1481,6 +1503,24 @@ namespace MonoDevelop.Components
 			}
 
 			window.Mapped += OnMappedDisableButtons;
+#endif
+		}
+
+
+		public static void EmitAddSignal(Container container, Widget child)
+		{
+#if MAC
+			// On Mac if we add a widget to a parent by hand, we need to inform the accessibility system of the fact
+			// If this is called from Linux or Windows custom Gtk then it will trigger warnings because we've protected
+			// for the situation in the Mac version of Gtk
+			GLib.Signal.Emit(container, "add", child);
+#endif
+		}
+
+		public static void EmitRemoveSignal(Container container, Widget child)
+		{
+#if MAC
+			GLib.Signal.Emit(container, "remove", child);
 #endif
 		}
 	}

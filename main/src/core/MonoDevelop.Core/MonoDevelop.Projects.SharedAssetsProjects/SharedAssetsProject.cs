@@ -82,8 +82,12 @@ namespace MonoDevelop.Projects.SharedAssetsProjects
 
 		protected override void OnInitializeFromTemplate (ProjectCreateInformation projectCreateInfo, XmlElement projectOptions)
 		{
-			base.OnInitializeFromTemplate (projectCreateInfo, projectOptions);
+			// Get the language before calling OnInitializeFromTemplate so the language binding
+			// is available when adding new files to the project if the project is added to
+			// an existing solution.
 			languageName = projectOptions.GetAttribute ("language");
+
+			base.OnInitializeFromTemplate (projectCreateInfo, projectOptions);
 
 			string templateDefaultNamespace = GetDefaultNamespace (projectCreateInfo, projectOptions);
 			DefaultNamespace = templateDefaultNamespace ?? projectCreateInfo.ProjectName;
@@ -270,7 +274,7 @@ namespace MonoDevelop.Projects.SharedAssetsProjects
 			return ProjectFeatures.None;
 		}
 
-		protected override bool OnFastCheckNeedsBuild (ConfigurationSelector configuration)
+		protected override bool OnFastCheckNeedsBuild (ConfigurationSelector configuration, TargetEvaluationContext context)
 		{
 			return false;
 		}
@@ -350,7 +354,7 @@ namespace MonoDevelop.Projects.SharedAssetsProjects
 			if (e.ProjectReference.ReferenceType == ReferenceType.Project && e.ProjectReference.Reference == Name) {
 				foreach (var f in Files) {
 					var pf = e.Project.GetProjectFile (f.FilePath);
-					if ((pf.Flags & ProjectItemFlags.DontPersist) != 0)
+					if (pf != null && (pf.Flags & ProjectItemFlags.DontPersist) != 0)
 						e.Project.Files.Remove (pf.FilePath);
 				}
 			}

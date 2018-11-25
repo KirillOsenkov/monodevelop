@@ -241,8 +241,8 @@ namespace MonoDevelop.Components.MainToolbar
 		/// <summary>
 		/// Rebuilds the toolbar.
 		/// </summary>
-		/// <param name="buttons">A list of buttons.</param>
-		void RebuildToolbar (IEnumerable<IButtonBarButton> buttons);
+		/// <param name="groups">A list of ButtonBarGroups.</param>
+		void RebuildToolbar (IEnumerable<ButtonBarGroup> groups);
 
 		/// <summary>
 		/// Sets a value indicating whether the button bar is interactible.
@@ -256,6 +256,8 @@ namespace MonoDevelop.Components.MainToolbar
 	/// </summary>
 	public interface IMainToolbarView : IRunButtonView, ISelectorView, ISearchEntryView, IStatusBarView, IButtonBarView
 	{
+		void Focus ();
+		void Focus (Action exitAction);
 	}
 }
 

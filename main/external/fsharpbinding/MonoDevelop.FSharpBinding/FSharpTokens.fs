@@ -1,9 +1,10 @@
 ﻿namespace MonoDevelop.FSharp
 open Microsoft.FSharp.Compiler.SourceCodeServices
 open MonoDevelop
+open MonoDevelop.Core
+open MonoDevelop.FSharp.Shared
 open MonoDevelop.Ide.Editor
 open ExtCore.Control
-open MonoDevelop.Core
 open System.IO
 
 module Tokens =
@@ -11,11 +12,11 @@ module Tokens =
         let line, col, txt = editor.GetLineInfoFromOffset offset
         let getTokens() =
             Lexer.tokenizeLine txt [||] line txt Lexer.singleLineQueryLexState
-
+        
         let lineTokens =
             maybe { let! pd = context.TryGetFSharpParsedDocument()
                     let! tokens = pd.Tokens
-                    let lineTokens, _state = tokens |> List.item (line - 1)
+                    let lineTokens, _line = tokens |> List.item (line - 1)
                     return lineTokens }
                     |> Option.getOrElse getTokens
 

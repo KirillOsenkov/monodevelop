@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using NuGet.Common;
 using NuGet.Indexing;
+using NuGet.Packaging;
 using NuGet.Protocol.Core.Types;
 
 namespace NuGet.PackageManagement.UI
@@ -155,6 +156,11 @@ namespace NuGet.PackageManagement.UI
 				          .AddRange(notCompleted
 				              .ToDictionary(kv => kv.Key, kv => GetLoadingStatus(kv.Value.Status)));
 			}
+
+			// Observe the aggregate task exception to prevent an unhandled exception.
+			// The individual task exceptions are logged in LogError and will be reported
+			// in the Add Packages dialog.
+			var ex = aggregatedTask.Exception;
 
 			return aggregated;
 		}

@@ -131,6 +131,19 @@ namespace MonoDevelop.Projects
 			SGen
 		}
 
+		public enum RuntimeArchitecture
+		{
+			[MonoArg (null)]
+			[LocalizedDescription ("Default")]
+			Default,
+			[LocalizedDescription ("32-bit")]
+			[MonoArg ("32")]
+			b32,
+			[LocalizedDescription ("64-bit")]
+			[MonoArg ("64")]
+			b64
+		}
+
 		static Dictionary<PropertyInfo, ItemPropertyAttribute> itemPropertyAttributes = new Dictionary<PropertyInfo, ItemPropertyAttribute> ();
 		static Dictionary<PropertyInfo, MonoArgAttribute> monoArgAttributes = new Dictionary<PropertyInfo, MonoArgAttribute> ();
 		static Dictionary<PropertyInfo, EnvVarAttribute> envVarAttributes = new Dictionary<PropertyInfo, EnvVarAttribute> ();
@@ -159,6 +172,11 @@ namespace MonoDevelop.Projects
 
 		public MonoExecutionParameters ()
 		{
+			ResetProperties ();
+		}
+
+		public void ResetProperties ()
+		{
 			foreach (var kvp in itemPropertyAttributes) {
 				var prop = kvp.Key;
 				var propAttr = kvp.Value;
@@ -166,7 +184,7 @@ namespace MonoDevelop.Projects
 					prop.SetValue (this, propAttr.DefaultValue, null);
 			}
 		}
-		
+
 		public void GenerateOptions (IDictionary<string,string> envVars, out string options)
 		{
 			StringBuilder ops = new StringBuilder ();
@@ -589,5 +607,27 @@ namespace MonoDevelop.Projects
 		[MonoArg ("{0}")]
 		[ItemProperty (DefaultValue="")]
 		public string MonoAdditionalOptions { get; set; }
+
+		[LocalizedCategory ("Runtime")]
+		[LocalizedDisplayName ("Architecture")]
+		[LocalizedDescription ("Selects the bitness of the Mono binary used, if available. If the binary used is already for the selected bitness, nothing changes. If not, the execution switches to a binary with the selected bitness suffix installed side by side (architecture=64 will switch to '/bin/mono64' if '/bin/mono' is a 32-bit build).")]
+		[MonoArg ("--arch={0}")]
+		[ItemProperty ("MonoArchitecture", DefaultValue = RuntimeArchitecture.Default)]
+		public RuntimeArchitecture Architecture { get; set; }
+
+		string legacyArchitecture;
+		[ItemProperty("Architecture", DefaultValue = null)]
+		internal string LegacyArchitecture {
+			get { return legacyArchitecture; }
+			set {
+				legacyArchitecture = value;
+
+				// The Architecture property is now serialized as "MonoArchitecture" to avoid conflicts with existing MSBuild properties.
+				// If the value being read from the "Architecture" property is a valid value for the Mono architecture, then let's assume
+				// that the property is actually the Mono architecture, and set it to the right property.
+				if (Enum.TryParse<RuntimeArchitecture>(value, out RuntimeArchitecture arch) && arch != RuntimeArchitecture.Default)
+					Architecture = arch;
+			}
+		}
 	}
 }

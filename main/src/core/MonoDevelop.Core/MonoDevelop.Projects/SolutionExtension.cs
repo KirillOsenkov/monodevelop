@@ -118,6 +118,7 @@ namespace MonoDevelop.Projects
 			return next.OnGetRunConfigurations ();
 		}
 
+		[Obsolete("This method will be removed in future releases")]
 		internal protected virtual bool NeedsBuilding (ConfigurationSelector configuration)
 		{
 			return next.NeedsBuilding (configuration);
@@ -187,6 +188,16 @@ namespace MonoDevelop.Projects
 		internal protected virtual bool OnGetSupportsFormat (MSBuildFileFormat format)
 		{
 			return OnGetSupportsFormat (format);
+		}
+
+		internal protected virtual Task OnBeginBuildOperation (ProgressMonitor monitor, ConfigurationSelector configuration, OperationContext operationContext)
+		{
+			return next.OnBeginBuildOperation (monitor, configuration, operationContext);
+		}
+
+		internal protected virtual Task OnEndBuildOperation (ProgressMonitor monitor, ConfigurationSelector configuration, OperationContext operationContext, BuildResult result)
+		{
+			return next.OnEndBuildOperation (monitor, configuration, operationContext, result);
 		}
 	}
 }

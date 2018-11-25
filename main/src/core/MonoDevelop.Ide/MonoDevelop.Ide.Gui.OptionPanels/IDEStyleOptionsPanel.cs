@@ -32,6 +32,7 @@ using System.Collections;
 using System.Collections.Generic;
 
 using MonoDevelop.Components;
+using MonoDevelop.Components.AtkCocoaHelper;
 using MonoDevelop.Core;
 using MonoDevelop.Ide.Gui.Dialogs;
 using MonoDevelop.Components.Commands;
@@ -59,7 +60,7 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 	{
 		string currentTheme;
 
-		static Lazy<List<string>> themes = new Lazy<List<string>> (() => {
+		static Lazy<Dictionary<string, string>> themes = new Lazy<Dictionary<string, string>> (() => {
 			var searchDirs = new List<string> ();
 
 			string prefix = Environment.GetEnvironmentVariable ("MONO_INSTALL_PREFIX");
@@ -70,14 +71,13 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 			if (!string.IsNullOrEmpty (prefix))
 				searchDirs.Add (new FilePath (prefix).Combine ("share").Combine ("themes"));
 			
-
-			var themes = FindThemes (searchDirs).ToList ();
+			var themes = FindThemes (searchDirs);
 			return themes;
 		});
 
 		public static IList<string> InstalledThemes {
 			get {
-				return themes.Value;
+				return themes.Value.Keys.ToList ();
 			}
 		}
 		
@@ -86,6 +86,15 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 		{
 			this.Build();
 			Load ();
+
+			comboTheme.SetCommonAccessibilityAttributes ("IDEStyleOptionsPanel.Theme", labelTheme,
+			                                             GettextCatalog.GetString ("Select the user interface theme"));
+
+			comboLanguage.SetCommonAccessibilityAttributes ("IDEStyleOptionsPanel.Language", label2,
+			                                                GettextCatalog.GetString ("Select the user interface language"));
+
+			imageRestart.SetCommonAccessibilityAttributes ("IDEStyleOptionsPanel.RestartImage", labelRestart,
+			                                               GettextCatalog.GetString ("A restart is required before these changes take effect"));
 		}
 
 		void Load ()
@@ -105,7 +114,7 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 			foreach (string t in InstalledThemes)
 				comboTheme.AppendText (t);
 
-			var sel = themes.Value.IndexOf (IdeApp.Preferences.UserInterfaceThemeName);
+			var sel = themes.Value.Values.IndexOf (IdeApp.Preferences.UserInterfaceThemeName);
 			if (sel == -1)
 				sel = 0;
 			else if (Platform.IsLinux)
@@ -114,6 +123,7 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 			comboTheme.Active = sel;
 			comboTheme.Changed += ComboThemeChanged;
 			tableRestart.Visible = separatorRestart.Visible = false;
+
 			labelRestart.LabelProp = GettextCatalog.GetString ("These preferences will take effect next time you start {0}", BrandingService.ApplicationName);
 			btnRestart.Label = GettextCatalog.GetString ("Restart {0}", BrandingService.ApplicationName);
 
@@ -125,7 +135,7 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 		void RestartClicked (object sender, System.EventArgs e)
 		{
 			Store ();
-			IdeApp.Restart (true);
+			IdeApp.Restart (true).Ignore();
 		}
 
 		void UpdateRestartMessage ()
@@ -158,7 +168,7 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 			if (comboTheme.Active == 0 && Platform.IsLinux)
 				theme = "";
 			else
-				theme = comboTheme.ActiveText;
+				theme = themes.Value [comboTheme.ActiveText];
 			SetTheme (theme);
 		}
 
@@ -172,9 +182,9 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 		}
 
 		// Code for getting the list of themes based on f-spot
-		static ICollection<string> FindThemes (IEnumerable<string> themeDirs)
+		static Dictionary<string, string> FindThemes (IEnumerable<string> themeDirs)
 		{
-			var themes = new HashSet<string> ();
+			var themes = new Dictionary<string, string> ();
 			if (Platform.IsLinux) {
 				string gtkrc = System.IO.Path.Combine ("gtk-2.0", "gtkrc");
 				foreach (string themeDir in themeDirs) {
@@ -184,13 +194,13 @@ namespace MonoDevelop.Ide.Gui.OptionPanels
 						if (System.IO.File.Exists (dir.Combine (gtkrc))) {
 							var themeName = dir.FileName;
 							if (!IsBadGtkTheme (themeName))
-								themes.Add (themeName);
+								themes.Add (themeName, themeName);
 						}
 					}
 				}
 			} else {
-				themes.Add ("Light");
-				themes.Add ("Dark");
+				themes.Add (GettextCatalog.GetString ("Light"), "Light");
+				themes.Add (GettextCatalog.GetString ("Dark"), "Dark");
 			}
 			return themes;
 		}

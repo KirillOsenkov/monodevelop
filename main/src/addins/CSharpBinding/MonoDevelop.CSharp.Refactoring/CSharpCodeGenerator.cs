@@ -114,7 +114,7 @@ namespace MonoDevelop.CSharp.Refactoring
 					return ns + "." + name;
 
 
-				return RoslynCompletionData.SafeMinimalDisplayString (type, model, Editor.CaretOffset, Ambience.LabelFormat);
+				return CSharpAmbience.SafeMinimalDisplayString (type, model, Editor.CaretOffset, Ambience.LabelFormat);
 			}
 		}
 
@@ -330,7 +330,7 @@ namespace MonoDevelop.CSharp.Refactoring
 		{
 			if (type == null)
 				throw new ArgumentNullException("type");
-			result.Append(RoslynCompletionData.SafeMinimalDisplayString (type, options.SemanticModel, options.Part.SourceSpan.Start, Ambience.LabelFormat));
+			result.Append(CSharpAmbience.SafeMinimalDisplayString (type, options.SemanticModel, options.Part.SourceSpan.Start, Ambience.LabelFormat));
 
 			//			var implementingType = options.Part;
 			//			var loc = implementingType.Region.End;
@@ -451,7 +451,7 @@ namespace MonoDevelop.CSharp.Refactoring
 			AppendIndent (result);
 			bodyStartOffset = result.Length;
 			foreach (var cmt in MonoTouchComments) {
-				result.AppendLine("//" + cmt);
+				result.Append("//").AppendLine (cmt);
 				AppendIndent (result);
 			}
 			result.Append("throw new ");
@@ -727,17 +727,17 @@ namespace MonoDevelop.CSharp.Refactoring
 						} else {
 							result.Append ("(");
 							AppendReturnType (result, options, p.Type);
-							result.Append (")" + p.ExplicitDefaultValue);
+							result.Append (")").Append (p.ExplicitDefaultValue);
 						}
 					} else if (p.ExplicitDefaultValue is char) {
-						result.Append ("'" + p.ExplicitDefaultValue + "'");
+						result.Append ("'").Append (p.ExplicitDefaultValue).Append ("'");
 					} else if (p.ExplicitDefaultValue is string) {
-						result.Append ("\"" + CSharpTextEditorIndentation.ConvertToStringLiteral ((string)p.ExplicitDefaultValue) + "\"");
+						result.Append ("\"").Append (CSharpTextEditorIndentation.ConvertToStringLiteral ((string)p.ExplicitDefaultValue)).Append ("\"");
 					} else if (p.ExplicitDefaultValue is bool) {
 						result.Append ((bool)p.ExplicitDefaultValue ? "true" : "false");
 					} else if (p.ExplicitDefaultValue == null) {
 						if (p.Type.IsValueType && p.Type.SpecialType != SpecialType.System_String) {
-							result.Append ("default(" + p.Type.ToMinimalDisplayString (options.SemanticModel, options.Part.SourceSpan.Start) + ")");
+							result.Append ("default(").Append (p.Type.ToMinimalDisplayString (options.SemanticModel, options.Part.SourceSpan.Start)).Append (")");
 						} else {
 							result.Append ("null");
 						}

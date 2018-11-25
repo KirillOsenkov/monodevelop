@@ -30,7 +30,7 @@
     <binding command="MonoDevelop.FSharp.FSharpCommands.SendLine" shortcut="" />
     <binding command="MonoDevelop.FSharp.FSharpCommands.SendReferences" shortcut="" />
     <binding command="MonoDevelop.FSharp.FSharpCommands.SendSelection" shortcut="" />
-    <binding command="MonoDevelop.Ide.CodeFormatting.CodeFormattingCommands.FormatBuffer" shortcut="Control+E|D Control+K|D Control+K|Control+D" />
+    <binding command="MonoDevelop.Ide.CodeFormatting.CodeFormattingCommands.FormatBuffer" shortcut="Control+K|Control+D Control+K|D Control+E|D" />
     <binding command="MonoDevelop.Ide.Commands.EditCommands.AddCodeComment" shortcut="Control+E|C" />
     <binding command="MonoDevelop.Ide.Commands.EditCommands.Copy" shortcut="Control+C" />
     <binding command="MonoDevelop.Ide.Commands.EditCommands.Cut" shortcut="Control+X" />
@@ -116,8 +116,8 @@
     <binding command="MonoDevelop.Ide.Commands.TextEditorCommands.PulseCaret" shortcut="" />
     <binding command="MonoDevelop.Ide.Commands.TextEditorCommands.ScrollLineDown" shortcut="Control+Down" />
     <binding command="MonoDevelop.Ide.Commands.TextEditorCommands.ScrollLineUp" shortcut="Control+Up" />
-    <binding command="MonoDevelop.Ide.Commands.TextEditorCommands.ScrollPageDown" shortcut="Page_Down Control+Page_Down" />
-    <binding command="MonoDevelop.Ide.Commands.TextEditorCommands.ScrollPageUp" shortcut="Page_Up Control+Page_Up" />
+    <binding command="MonoDevelop.Ide.Commands.TextEditorCommands.ScrollPageDown" shortcut="Control+Page_Down" />
+    <binding command="MonoDevelop.Ide.Commands.TextEditorCommands.ScrollPageUp" shortcut="Control+Page_Up" />
     <binding command="MonoDevelop.Ide.Commands.TextEditorCommands.SelectionMoveEnd" shortcut="Shift+End" />
     <binding command="MonoDevelop.Ide.Commands.TextEditorCommands.SelectionMoveHome" shortcut="Shift+Home" />
     <binding command="MonoDevelop.Ide.Commands.TextEditorCommands.SelectionMoveNextWord" shortcut="Control+Shift+Right" />

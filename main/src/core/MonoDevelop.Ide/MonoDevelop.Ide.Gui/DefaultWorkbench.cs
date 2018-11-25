@@ -42,6 +42,7 @@ using MonoDevelop.Components.Docking;
 using GLib;
 using Gtk;
 using MonoDevelop.Components;
+using MonoDevelop.Components.AtkCocoaHelper;
 using MonoDevelop.Ide.Extensions;
 using MonoDevelop.Components.MainToolbar;
 using MonoDevelop.Components.DockNotebook;
@@ -90,8 +91,6 @@ namespace MonoDevelop.Ide.Gui
 		DockItem documentDockItem;
 		MainToolbarController toolbar;
 		MonoDevelopStatusBar bottomBar;
-
-		Timer saveTimer;
 
 #if DUMMY_STRINGS_FOR_TRANSLATION_DO_NOT_COMPILE
 		private void DoNotCompile ()
@@ -222,6 +221,8 @@ namespace MonoDevelop.Ide.Gui
 
 			IdeApp.CommandService.SetRootWindow (this);
 			DockNotebook.NotebookChanged += NotebookPagesChanged;
+
+			Accessible.SetIsMainWindow (true);
 		}
 
 		void NotebookPagesChanged (object sender, EventArgs e)
@@ -272,6 +273,7 @@ namespace MonoDevelop.Ide.Gui
 			IdeApp.ProjectOperations.CurrentProjectChanged += (s,a) => SetWorkbenchTitle ();
 
 			FileService.FileRemoved += CheckRemovedFile;
+			FileService.FileMoved += CheckRenamedFile;
 			FileService.FileRenamed += CheckRenamedFile;
 			
 //			TopMenu.Selected   += new CommandHandler(OnTopMenuSelected);
@@ -547,7 +549,22 @@ namespace MonoDevelop.Ide.Gui
 			}
 			return window.ViewContent.ContentName + post + " – " + BrandingService.ApplicationLongName;
 		}
-		
+
+		void SetAccessibilityDetails (IWorkbenchWindow window)
+		{
+			string documentUrl, filename;
+			if (window.ViewContent.Project != null) {
+				documentUrl = "file://" + window.ViewContent.Project.FileName;
+				filename = System.IO.Path.GetFileName (window.ViewContent.PathRelativeToProject);
+			} else {
+				documentUrl = string.Empty;
+				filename = string.Empty;
+			}
+
+			Accessible.SetDocument (documentUrl);
+			Accessible.SetFilename (filename);
+		}
+
 		void SetWorkbenchTitle ()
 		{
 			try {
@@ -555,13 +572,20 @@ namespace MonoDevelop.Ide.Gui
 				if (window != null) {
 					if (window.ActiveViewContent.Control.GetNativeWidget<Gtk.Widget> ().Toplevel == this)
 						Title = GetTitle (window);
+
+					SetAccessibilityDetails (window);
 				} else {
 					Title = GetDefaultTitle ();
 					if (IsInFullViewMode)
 						this.ToggleFullViewMode ();
+					Accessible.SetDocument ("");
+					Accessible.SetUrl ("");
 				}
+
 			} catch (Exception) {
 				Title = GetDefaultTitle ();
+				Accessible.SetDocument ("");
+				Accessible.SetFilename ("");
 			}
 		}
 		
@@ -646,7 +670,7 @@ namespace MonoDevelop.Ide.Gui
 								content.UntitledName = content.ContentName;
 								content.ContentName = null;
 							} else {
-								((SdiWorkspaceWindow)content.WorkbenchWindow).CloseWindow (true, true);
+								((SdiWorkspaceWindow)content.WorkbenchWindow).CloseWindow (true, true).Ignore();
 							}
 						}
 					}
@@ -658,7 +682,7 @@ namespace MonoDevelop.Ide.Gui
 								content.UntitledName = content.ContentName;
 								content.ContentName = null;
 							} else {
-								((SdiWorkspaceWindow)content.WorkbenchWindow).CloseWindow (true, true);
+								((SdiWorkspaceWindow)content.WorkbenchWindow).CloseWindow (true, true).Ignore();
 							}
 							return;
 						}
@@ -687,13 +711,21 @@ namespace MonoDevelop.Ide.Gui
 				}
 			}
 		}
-		
-		protected /*override*/ void OnClosing(object o, Gtk.DeleteEventArgs e)
+
+		bool closing;
+		protected /*override*/ async void OnClosing(object o, Gtk.DeleteEventArgs e)
 		{
-			if (Close()) {
+			// close the window in case DeleteEvent fires again after a successful close
+			if (closing) 
+				return;
+			
+			// don't allow Gtk to close the workspace, in case Close() leaves the synchronization context
+			// Gtk.Application.Quit () will handle it for us.
+			e.RetVal = true;
+			if (await Close ()) {
+				closing = true;
+				Destroy (); // default delete action
 				Gtk.Application.Quit ();
-			} else {
-				e.RetVal = true;
 			}
 		}
 		
@@ -720,7 +752,7 @@ namespace MonoDevelop.Ide.Gui
 			Destroy ();
 		}
 		
-		public bool Close() 
+		public async Task<bool> Close()
 		{
 			if (!IdeApp.OnExit ())
 				return false;
@@ -745,7 +777,7 @@ namespace MonoDevelop.Ide.Gui
 				}
 			}
 			
-			if (!IdeApp.Workspace.Close (false, false))
+			if (!await IdeApp.Workspace.Close (false, false))
 				return false;
 			
 			CloseAllViews ();
@@ -845,7 +877,13 @@ namespace MonoDevelop.Ide.Gui
 
 		void CreateComponents ()
 		{
+			Accessible.Name = "MainWindow";
+
 			fullViewVBox = new VBox (false, 0);
+			fullViewVBox.Accessible.Name = "MainWindow.Root";
+			fullViewVBox.Accessible.SetLabel ("Label");
+			fullViewVBox.Accessible.SetShouldIgnore (true);
+
 			rootWidget = fullViewVBox;
 			
 			InstallMenuBar ();
@@ -854,6 +892,8 @@ namespace MonoDevelop.Ide.Gui
 			DesktopService.SetMainWindowDecorations (this);
 			DesktopService.AttachMainToolbar (fullViewVBox, toolbar);
 			toolbarFrame = new CommandFrame (IdeApp.CommandService);
+			toolbarFrame.Accessible.Name = "MainWindow.Root.ToolbarFrame";
+			toolbarFrame.Accessible.SetShouldIgnore (true);
 
 			fullViewVBox.PackStart (toolbarFrame, true, true, 0);
 
@@ -1063,7 +1103,7 @@ namespace MonoDevelop.Ide.Gui
 			IdeApp.CommandService.ShowContextMenu (notebook, evt, "/MonoDevelop/Ide/ContextMenu/DocumentTab");
 		}
 		
-		internal void OnTabsReordered (Widget widget, int oldPlacement, int newPlacement)
+		internal void OnTabsReordered (DockNotebookTab widget, int oldPlacement, int newPlacement)
 		{
 			IdeApp.Workbench.ReorderDocuments (oldPlacement, newPlacement);
 		}
@@ -1093,6 +1133,40 @@ namespace MonoDevelop.Ide.Gui
 			return base.OnFocusInEvent (evnt);
 		}
 
+		bool haveFocusedToolbar = false;
+		protected override bool OnFocused (DirectionType direction)
+		{
+			// If the toolbar is not focused, focus it, and focus the next child once it loses focus
+			switch (direction) {
+			case DirectionType.TabForward:
+				if (!haveFocusedToolbar) {
+					haveFocusedToolbar = true;
+					toolbar.ToolbarView.Focus(() => {
+						if (!dock.ChildFocus(direction)) {
+							haveFocusedToolbar = false;
+							OnFocused(direction);
+						}
+					});
+				} else {
+					if (!dock.ChildFocus(direction)) {
+						haveFocusedToolbar = false;
+						OnFocused(direction);
+					}
+				}
+				break;
+
+			case DirectionType.TabBackward:
+				if (!dock.ChildFocus(direction)) {
+					haveFocusedToolbar = false;
+					OnFocused(DirectionType.TabForward);
+				}
+				break;
+
+			default:
+				return base.OnFocused(direction);
+			}
+			return true;
+		}
 
 		/// <summary>
 		/// Sets the current active document widget.
@@ -1238,7 +1312,7 @@ namespace MonoDevelop.Ide.Gui
 		
 		internal void CloseClicked (object o, TabEventArgs e)
 		{
-			((SdiWorkspaceWindow)e.Tab.Content).CloseWindow (false, true);
+			((SdiWorkspaceWindow)e.Tab.Content).CloseWindow (false, true).Ignore();
 		}
 
 		internal void RemoveTab (DockNotebook tabControl, int pageNum, bool animate)
@@ -1482,7 +1556,6 @@ namespace MonoDevelop.Ide.Gui
 				window.ToggleFullViewMode ();
 			};
 			TabsReordered += window.OnTabsReordered;
-			CanFocus = true;
 			
 			DoPopupMenu = window.ShowPopup;
 			Events |= Gdk.EventMask.FocusChangeMask | Gdk.EventMask.KeyPressMask;

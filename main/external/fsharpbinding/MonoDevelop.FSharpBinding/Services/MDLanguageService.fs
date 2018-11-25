@@ -55,6 +55,8 @@ module MonoDevelop =
         member x.TryGetAst() =
             x.TryGetParsedDocument() >>= (fun pd -> pd.TryGetAst())
 
+        member x.TryGetCheckResults() =
+            x.TryGetAst() >>= (fun ast -> ast.CheckResults)
 
     let internal getConfig () =
         match IdeApp.Workspace with
@@ -95,15 +97,18 @@ type MDLanguageService() =
   static let mutable instance =
     lazy
         let _ = vfs.Force()
+        // VisualFSharp sets extraProjectInfo to be the Roslyn Workspace
+        // object, but we don't have that level of integration yet
+        let extraProjectInfo = None 
         new LanguageService(
-            (fun changedfile ->
+            (fun (changedfile, _) ->
                 try
                     let doc = IdeApp.Workbench.ActiveDocument
                     if doc <> null && doc.FileName.FullPath.ToString() = changedfile then
                         LoggingService.LogDebug("FSharp Language Service: Compiler notifying document '{0}' is dirty and needs reparsing.  Reparsing as its the active document.", (Path.GetFileName changedfile))
                         doc.ReparseDocument()
                 with exn  ->
-                   LoggingService.LogDebug("FSharp Language Service: Error while attempting to notify document '{0}' needs reparsing", (Path.GetFileName changedfile), exn) ))
+                   LoggingService.LogDebug("FSharp Language Service: Error while attempting to notify document '{0}' needs reparsing", (Path.GetFileName changedfile), exn) ), extraProjectInfo)
 
   static member Instance with get () = instance.Force ()
                          and  set v  = instance <- lazy v
@@ -111,52 +116,52 @@ type MDLanguageService() =
   static member DisableVirtualFileSystem() =
       vfs <- lazy (Shim.FileSystem)
 
+  static member invalidateProjectFile(projectFile: FilePath) =
+      try
+          if File.Exists (projectFile.FullPath.ToString()) then
+              MDLanguageService.Instance.TryGetProjectCheckerOptionsFromCache(projectFile.FullPath.ToString(), [("Configuration", IdeApp.Workspace.ActiveConfigurationId)])
+              |> Option.iter(fun options ->
+                  MDLanguageService.Instance.InvalidateConfiguration(options)
+                  MDLanguageService.Instance.ClearProjectInfoCache())
+      with ex -> LoggingService.LogError ("Could not invalidate configuration", ex)
+
+  static member invalidateFiles (args:#ProjectFileEventInfo seq) =
+      for projectFileEvent in args do
+          if FileService.supportedFileName (projectFileEvent.ProjectFile.FilePath.ToString()) then
+              MDLanguageService.invalidateProjectFile(projectFileEvent.ProjectFile.FilePath)
 [<AutoOpen>]
 module MDLanguageServiceImpl =
     let languageService = MDLanguageService.Instance
 
 /// Various utilities for working with F# language service
 module internal ServiceUtils =
-    let map =
-      [ 0x0000,  "md-class"
-        0x0003,  "md-enum"
-        0x00012, "md-struct"
-        0x00018, "md-struct" (* value type *)
-        0x0002,  "md-delegate"
-        0x0008,  "md-interface"
-        0x000e,  "md-module" (* module *)
-        0x000f,  "md-name-space"
-        0x000c,  "md-method";
-        0x000d,  "md-method" (* method2 ? *)
-        0x00011, "md-property"
-        0x0005,  "md-event"
-        0x0007,  "md-field" (* fieldblue ? *)
-        0x0020,  "md-field" (* fieldyellow ? *)
-        0x0001,  "md-field" (* const *)
-        0x0004,  "md-field" (* enummember *)
-        0x0006,  "md-exception" (* exception *)
-        0x0009,  "md-text-file-icon" (* TextLine *)
-        0x000a,  "md-regular-file" (* Script *)
-        0x000b,  "Script" (* Script2 *)
-        0x0010,  "md-tip-of-the-day" (* Formula *);
-        0x00013, "md-class" (* Template *)
-        0x00014, "md-class" (* Typedef *)
-        0x00015, "md-type" (* Type *)
-        0x00016, "md-type" (* Union *)
-        0x00017, "md-field" (* Variable *)
-        0x00019, "md-class" (* Intrinsic *)
-        0x0001f, "md-breakpint" (* error *)
-        0x00021, "md-misc-files" (* Misc1 *)
-        0x0022,  "md-misc-files" (* Misc2 *)
-        0x00023, "md-misc-files" (* Misc3 *) ] |> Map.ofSeq
-
     /// Translates icon code that we get from F# language service into a MonoDevelop icon
     let getIcon (navItem: FSharpNavigationDeclarationItem) =
-      match navItem.Kind with
-      | NamespaceDecl -> "md-name-space"
-      | _ -> match map.TryFind (navItem.Glyph / 6), map.TryFind (navItem.Glyph % 6) with
-             | Some(s), _ -> s // Is the second number good for anything?
-             | _, _ -> "md-breakpoint"
+        match navItem.Kind with
+        | NamespaceDecl -> "md-name-space"
+        | _ ->
+            match navItem.Glyph with
+            | FSharpGlyph.Class -> "md-class"
+            | FSharpGlyph.Enum -> "md-enum"
+            | FSharpGlyph.Struct -> "md-struct"
+            | FSharpGlyph.ExtensionMethod -> "md-struct"
+            | FSharpGlyph.Delegate -> "md-delegate"
+            | FSharpGlyph.Interface -> "md-interface"
+            | FSharpGlyph.Module -> "md-module"
+            | FSharpGlyph.NameSpace -> "md-name-space"
+            | FSharpGlyph.Method -> "md-method";
+            | FSharpGlyph.OverridenMethod -> "md-method";
+            | FSharpGlyph.Property -> "md-property"
+            | FSharpGlyph.Event -> "md-event"
+            | FSharpGlyph.Constant -> "md-field"
+            | FSharpGlyph.EnumMember -> "md-field"
+            | FSharpGlyph.Exception -> "md-exception"
+            | FSharpGlyph.Typedef -> "md-class"
+            | FSharpGlyph.Type -> "md-type"
+            | FSharpGlyph.Union -> "md-type"
+            | FSharpGlyph.Variable -> "md-field"
+            | FSharpGlyph.Field -> "md-field"
+            | FSharpGlyph.Error -> "md-breakpint"
 
 module internal KeywordList =
     let modifiers = 

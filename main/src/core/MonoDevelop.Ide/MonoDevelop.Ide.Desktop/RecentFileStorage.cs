@@ -81,12 +81,13 @@ namespace MonoDevelop.Ide.Desktop
 					return;
 				}
 
-				var stream = t.Result;
-				lock (cacheLock) {
-					cachedItemList = ReadStore (stream);
-					cachedItemList.Sort ();
+				using (var stream = t.Result) {
+					lock (cacheLock) {
+						cachedItemList = ReadStore (stream);
+						cachedItemList.Sort ();
+					}
+					OnRecentFilesChanged (cachedItemList);
 				}
-				OnRecentFilesChanged (cachedItemList);
 			});
 		}
 		
@@ -239,8 +240,12 @@ namespace MonoDevelop.Ide.Desktop
 				// And we batch as many modifications as possible in a 1 second window.
 				if (recentSaveTask == null) {
 					recentSaveTask = Task.Run (async () => {
-						await Task.Delay (1000);
-						await SaveRecentFiles ();
+						await Task.Delay (1000).ConfigureAwait (false);
+						try {
+							await SaveRecentFiles ().ConfigureAwait (false);
+						} catch (Exception ex) {
+							LoggingService.LogError ("Error while saving recent file store.", ex);
+						}
 					});
 				}
 			}
@@ -259,7 +264,7 @@ namespace MonoDevelop.Ide.Desktop
 				recentSaveTask = null;
 			}
 
-			using (var fs = await AcquireFileExclusive (filePath)) {
+			using (var fs = await AcquireFileExclusive (filePath).ConfigureAwait (false)) {
 				var list = ReadStore (fs);
 				bool modified = false;
 

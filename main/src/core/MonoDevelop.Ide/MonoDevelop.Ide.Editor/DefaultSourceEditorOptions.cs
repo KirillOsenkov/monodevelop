@@ -200,9 +200,9 @@ namespace MonoDevelop.Ide.Editor
 				}
 			}
 
-			string ITextEditorOptions.ColorScheme {
+			string ITextEditorOptions.EditorTheme {
 				get {
-					return DefaultSourceEditorOptions.Instance.ColorScheme;
+					return DefaultSourceEditorOptions.Instance.EditorTheme;
 				}
 			}
 
@@ -254,11 +254,7 @@ namespace MonoDevelop.Ide.Editor
 
 		DefaultSourceEditorOptions (TextStylePolicy currentPolicy)
 		{
-			WordNavigationStyle defaultWordNavigation = WordNavigationStyle.Unix;
-			if (Platform.IsWindows) {
-				defaultWordNavigation = WordNavigationStyle.Windows;
-			}
-			wordNavigationStyle = ConfigurationProperty.Create ("WordNavigationStyle", defaultWordNavigation);
+			wordNavigationStyle = ConfigurationProperty.Create ("WordNavigationStyle", WordNavigationStyle.Windows);
 			
 			UpdateStylePolicy (currentPolicy);
 			FontService.RegisterFontChangedCallback ("Editor", UpdateFont);
@@ -343,7 +339,7 @@ namespace MonoDevelop.Ide.Editor
 			}
 		}
 
-		ConfigurationProperty<bool> autoInsertMatchingBracket = ConfigurationProperty.Create ("AutoInsertMatchingBracket", false);
+		ConfigurationProperty<bool> autoInsertMatchingBracket = ConfigurationProperty.Create ("AutoInsertMatchingBracket", true);
 		public bool AutoInsertMatchingBracket {
 			get {
 				return autoInsertMatchingBracket;
@@ -387,13 +383,24 @@ namespace MonoDevelop.Ide.Editor
 			}
 		}
 		
-		ConfigurationProperty<LineEndingConversion> lineEndingConversion = ConfigurationProperty.Create("LineEndingConversion", LineEndingConversion.LeaveAsIs);
+		ConfigurationProperty<LineEndingConversion> lineEndingConversion = ConfigurationProperty.Create ("LineEndingConversion", LineEndingConversion.LeaveAsIs);
 		public LineEndingConversion LineEndingConversion {
 			get {
 				return lineEndingConversion;
 			}
 			set {
 				if (lineEndingConversion.Set (value))
+					OnChanged (EventArgs.Empty);
+			}
+		}
+
+		ConfigurationProperty<bool> showProcedureLineSeparators = ConfigurationProperty.Create ("ShowProcedureLineSeparators", false);
+		public bool ShowProcedureLineSeparators {
+			get {
+				return showProcedureLineSeparators;
+			}
+			set {
+				if (showProcedureLineSeparators.Set (value))
 					OnChanged (EventArgs.Empty);
 			}
 		}
@@ -464,7 +471,7 @@ namespace MonoDevelop.Ide.Editor
 			}
 		}
 		
-		bool tabsToSpaces = false;
+		bool tabsToSpaces = true;
 		public bool TabsToSpaces {
 			get {
 				return tabsToSpaces;
@@ -592,7 +599,7 @@ namespace MonoDevelop.Ide.Editor
 			}
 		}
 
-		int  rulerColumn = 80;
+		int  rulerColumn = 120;
 
 		public int RulerColumn {
 			get {
@@ -681,7 +688,7 @@ namespace MonoDevelop.Ide.Editor
 		}
 		
 		ConfigurationProperty<string> colorScheme = IdeApp.Preferences.ColorScheme;
-		public string ColorScheme {
+		public string EditorTheme {
 			get {
 				return colorScheme;
 			}
@@ -695,7 +702,7 @@ namespace MonoDevelop.Ide.Editor
 			OnChanged (EventArgs.Empty);
 		}
 		
-		ConfigurationProperty<bool> generateFormattingUndoStep = ConfigurationProperty.Create ("GenerateFormattingUndoStep", false);
+		ConfigurationProperty<bool> generateFormattingUndoStep = ConfigurationProperty.Create ("GenerateFormattingUndoStep", true);
 		public bool GenerateFormattingUndoStep {
 			get {
 				return generateFormattingUndoStep;

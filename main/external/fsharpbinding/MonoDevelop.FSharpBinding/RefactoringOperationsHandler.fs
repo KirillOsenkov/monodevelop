@@ -101,7 +101,7 @@ module Refactoring =
         match symbolUse.Symbol with
         | :? FSharpMemberOrFunctionOrValue as mfv when mfv.IsDispatchSlot ->
             maybe {
-                let! ent =  mfv.EnclosingEntitySafe
+                let! ent =  mfv.EnclosingEntity
                 let! bt = ent.BaseType
                 if bt.HasTypeDefinition then
                     let baseDefs = bt.TypeDefinition.MembersFunctionsAndValues
@@ -172,7 +172,6 @@ module Refactoring =
         async {
             do! Async.SwitchToContext(Runtime.MainSynchronizationContext)
             let! jumped = RefactoringService.TryJumpToDeclarationAsync(symbol.XmlDocSig, ctx.Project)
-                          |> Async.AwaitTask
 
             if not jumped then
                 match symbol.Assembly.FileName with
@@ -388,7 +387,7 @@ module Refactoring =
             match symbolUse.Symbol with
             | :? FSharpMemberOrFunctionOrValue as mfv when mfv.IsDispatchSlot ->
                 maybe {
-                    let! ent =  mfv.EnclosingEntitySafe
+                    let! ent =  mfv.EnclosingEntity
                     let! bt = ent.BaseType
                     return bt.HasTypeDefinition } |> Option.getOrElse (fun () -> false)
 
@@ -497,7 +496,7 @@ type CurrentRefactoringOperationsHandler() =
                                         | :? FSharpEntity ->
                                             GettextCatalog.GetString ("Go to _Base Type")
                                         | :? FSharpMemberOrFunctionOrValue as mfv ->
-                                            match mfv.EnclosingEntitySafe with
+                                            match mfv.EnclosingEntity with
                                             | Some ent when ent.IsInterface ->
                                                 if mfv.IsProperty then GettextCatalog.GetString ("Go to _Interface Property")
                                                 elif mfv.IsEvent then GettextCatalog.GetString ("Go to _Interface Event")
@@ -541,7 +540,7 @@ type CurrentRefactoringOperationsHandler() =
                                 | :? FSharpEntity as fse when fse.IsInterface -> GettextCatalog.GetString ("Find Implementing Types")
                                 | :? FSharpEntity -> GettextCatalog.GetString ("Find Derived Types")
                                 | :? FSharpMemberOrFunctionOrValue as mfv ->
-                                    match mfv.EnclosingEntitySafe with
+                                    match mfv.EnclosingEntity with
                                     | Some ent when ent.IsInterface ->
                                         GettextCatalog.GetString ("Find Implementing Symbols")
                                     | _ -> GettextCatalog.GetString ("Find overriden Symbols")

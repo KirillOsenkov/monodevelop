@@ -25,7 +25,7 @@ namespace MonoDevelop.ConnectedServices
 		/// <summary>
 		/// The name of the node to display in the solution tree
 		/// </summary>
-		internal const string SolutionTreeNodeName = "Connected Services";
+		internal static string SolutionTreeNodeName = GettextCatalog.GetString ("Connected Services");
 
 		/// <summary>
 		/// The name of the folder that is used to store state about each connected service
@@ -41,7 +41,7 @@ namespace MonoDevelop.ConnectedServices
 		/// <summary>
 		/// The name of the Getting Started section that is displayed to the user
 		/// </summary>
-		internal const string GettingStartedSectionDisplayName = "Getting Started";
+		internal static string GettingStartedSectionDisplayName = GettextCatalog.GetString ("Getting Started");
 
 		/// <summary>
 		/// Gets the list of IConnectedService instances that support project
@@ -200,7 +200,7 @@ namespace MonoDevelop.ConnectedServices
 					if (service.Dependencies [i].Category == ConnectedServiceDependency.PackageDependencyCategory) {
 						if (i > 0)
 							sb.AppendLine ();
-						sb.Append ("   • " + service.Dependencies [i].DisplayName);
+						sb.Append ("   • ").Append (service.Dependencies [i].DisplayName);
 					}
 				}
 				sb.Append ("\n\n");
