@@ -82,6 +82,10 @@ namespace MonoDevelop.Components.Commands
 		internal bool handlerFoundInMulticast;
 		Gtk.Widget lastActiveWidget;
 
+#if MAC
+		Foundation.NSObject keyMonitor;
+#endif
+
 		Dictionary<Command, HashSet<Command>> conflicts;
 		internal Dictionary<Command, HashSet<Command>> Conflicts {
 			get {
@@ -103,10 +107,6 @@ namespace MonoDevelop.Components.Commands
 			ActionCommand c = new ActionCommand (CommandSystemCommands.ToolbarList, "Toolbar List", null, null, ActionType.Check);
 			c.CommandArray = true;
 			RegisterCommand (c);
-
-			#if MAC
-			AppKit.NSEvent.AddLocalMonitorForEventsMatchingMask (AppKit.NSEventMask.KeyDown, OnNSEventKeyPress);
-			#endif
 		}
 
 		/// <summary>
@@ -285,7 +285,7 @@ namespace MonoDevelop.Components.Commands
 					}
 				}
 			}
-			
+
 			isChord = false;
 			binding = null;
 			
@@ -294,7 +294,7 @@ namespace MonoDevelop.Components.Commands
 		
 		public event EventHandler<KeyBindingFailedEventArgs> KeyBindingFailed;
 
-		#if MAC
+#if MAC
 		AppKit.NSEvent OnNSEventKeyPress (AppKit.NSEvent ev)
 		{
 			// If we have a native window that can handle this command, let it process
@@ -310,6 +310,10 @@ namespace MonoDevelop.Components.Commands
 			if (window != null) {
 				// Try the handler in the native window.
 				if (window.PerformKeyEquivalent (ev))
+					return null;
+
+				// Try the default NSApplication handlers, like copy/paste commands inside native entries
+				if (PerformDefaultNSAppAction (window, ev))
 					return null;
 
 				// If the window is a gtk window and is registered in the command manager
@@ -332,7 +336,78 @@ namespace MonoDevelop.Components.Commands
 			}
 			return ev;
 		}
-		#endif
+
+		bool PerformDefaultNSAppAction (AppKit.NSWindow window, AppKit.NSEvent ev)
+		{
+			// Try the user defined bindings first
+			var gdkev = Mac.GtkMacInterop.ConvertKeyEvent (ev);
+			if (gdkev != null) {
+				bool complete;
+				KeyboardShortcut [] accels = KeyBindingManager.AccelsFromKey (gdkev, out complete);
+				if (complete) {
+					foreach (var accel in accels) {
+						var binding = KeyBindingManager.AccelLabelFromKey (accel.Key, accel.Modifier);
+
+						if (IsCommandBinding (Ide.Commands.EditCommands.Copy, binding))
+							return AppKit.NSApplication.SharedApplication.SendAction (new ObjCRuntime.Selector ("copy:"), null, window);
+
+						if (IsCommandBinding (Ide.Commands.EditCommands.Paste, binding))
+							return AppKit.NSApplication.SharedApplication.SendAction (new ObjCRuntime.Selector ("paste:"), null, window);
+
+						if (IsCommandBinding (Ide.Commands.EditCommands.Cut, binding))
+							return AppKit.NSApplication.SharedApplication.SendAction (new ObjCRuntime.Selector ("cut:"), null, window);
+
+						if (IsCommandBinding (Ide.Commands.EditCommands.SelectAll, binding))
+							return AppKit.NSApplication.SharedApplication.SendAction (new ObjCRuntime.Selector ("selectAll:"), null, window);
+
+						if (IsCommandBinding (Ide.Commands.EditCommands.Undo, binding))
+							return AppKit.NSApplication.SharedApplication.SendAction (new ObjCRuntime.Selector ("undo:"), null, window);
+
+						if (IsCommandBinding (Ide.Commands.EditCommands.Redo, binding))
+							return AppKit.NSApplication.SharedApplication.SendAction (new ObjCRuntime.Selector ("redo:"), null, window);
+					}
+				}
+			}
+
+			// Try default OSX selectors
+			bool actionResult = false;
+			if (ev.Type == AppKit.NSEventType.KeyDown) {
+				if ((ev.ModifierFlags & AppKit.NSEventModifierMask.CommandKeyMask) != 0) {
+					switch (ev.CharactersIgnoringModifiers) {
+					case "c":
+						actionResult = AppKit.NSApplication.SharedApplication.SendAction (new ObjCRuntime.Selector ("copy:"), null, window);
+						break;
+					case "v":
+						actionResult = AppKit.NSApplication.SharedApplication.SendAction (new ObjCRuntime.Selector ("paste:"), null, window);
+						break;
+					case "x":
+						actionResult = AppKit.NSApplication.SharedApplication.SendAction (new ObjCRuntime.Selector ("cut:"), null, window);
+						break;
+					case "a":
+						actionResult = AppKit.NSApplication.SharedApplication.SendAction (new ObjCRuntime.Selector ("selectAll:"), null, window);
+						break;
+					case "z":
+						actionResult = AppKit.NSApplication.SharedApplication.SendAction (new ObjCRuntime.Selector ("undo:"), null, window);
+						break;
+					case "Z":
+						actionResult = AppKit.NSApplication.SharedApplication.SendAction (new ObjCRuntime.Selector ("redo:"), null, window);
+						break;
+					}
+				}
+			}
+			return actionResult;
+		}
+
+		bool IsCommandBinding (object commandId, string binding)
+		{
+			var cmd = GetCommand (ToCommandId (commandId));
+			if (cmd != null) {
+				var bds = KeyBindingService.CurrentKeyBindingSet.GetBindings (cmd);
+				return bds.Contains (binding);
+			}
+			return false;
+		}
+#endif
 
 		[GLib.ConnectBefore]
 		void OnKeyPressed (object o, Gtk.KeyPressEventArgs e)
@@ -588,6 +663,12 @@ namespace MonoDevelop.Components.Commands
 			if (topLevelWindows.First != null && topLevelWindows.First.Value == win)
 				return;
 
+#if MAC
+			if (topLevelWindows.Count == 0) {
+				keyMonitor = AppKit.NSEvent.AddLocalMonitorForEventsMatchingMask (AppKit.NSEventMask.KeyDown, OnNSEventKeyPress);
+			}
+#endif
+
 			// Ensure all events that were subscribed in StartWaitingForUserInteraction are unsubscribed
 			// before doing any change to the topLevelWindows list
 			EndWaitingForUserInteraction ();
@@ -612,17 +693,26 @@ namespace MonoDevelop.Components.Commands
 		{
 			RegisterUserInteraction ();
 		}
-		
+
 		void TopLevelDestroyed (object o, EventArgs args)
 		{
 			RegisterUserInteraction ();
 
-			Gtk.Window w = (Gtk.Window) o;
+			Gtk.Window w = (Gtk.Window)o;
 			w.Destroyed -= TopLevelDestroyed;
 			w.KeyPressEvent -= OnKeyPressed;
 			w.KeyReleaseEvent -= OnKeyReleased;
 			w.ButtonPressEvent -= HandleButtonPressEvent;
 			topLevelWindows.Remove (w);
+#if MAC
+			if (topLevelWindows.Count == 0) {
+				if (keyMonitor != null) {
+					AppKit.NSEvent.RemoveMonitor (keyMonitor);
+					keyMonitor = null;
+				}
+			}
+#endif
+
 			if (w == lastFocused)
 				lastFocused = null;
 		}
@@ -630,7 +720,17 @@ namespace MonoDevelop.Components.Commands
 		public void Dispose ()
 		{
 			disposed = true;
-			bindings.Dispose ();
+			if (bindings != null) {
+				bindings.Dispose ();
+				bindings = null;
+			}
+
+#if MAC
+			if (keyMonitor != null) {
+				AppKit.NSEvent.RemoveMonitor (keyMonitor);
+				keyMonitor = null;
+			}
+#endif
 			lastFocused = null;
 		}
 		
