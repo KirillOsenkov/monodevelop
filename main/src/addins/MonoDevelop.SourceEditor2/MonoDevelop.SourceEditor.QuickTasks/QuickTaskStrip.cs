@@ -32,9 +32,7 @@ using Gdk;
 using MonoDevelop.Core;
 using MonoDevelop.Ide;
 using MonoDevelop.Components.Commands;
-using ICSharpCode.NRefactory;
 using System.Linq;
-using ICSharpCode.NRefactory.Refactoring;
 using MonoDevelop.Ide.Editor;
 using MonoDevelop.Ide.Editor.Extension;
 using Microsoft.CodeAnalysis;
@@ -105,7 +103,8 @@ namespace MonoDevelop.SourceEditor.QuickTasks
 					yield break;
 				foreach (var tasks in providerTasks.Values) {
 					foreach (var task in tasks) {
-						yield return task;
+						if (task.Severity != DiagnosticSeverity.Hidden)
+							yield return task;
 					}
 				}
 			}

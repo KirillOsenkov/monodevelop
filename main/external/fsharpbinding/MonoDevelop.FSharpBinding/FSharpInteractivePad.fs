@@ -47,8 +47,8 @@ type KillIntent =
 
 type FSharpInteractiveTextEditorOptions(options: MonoDevelop.Ide.Editor.DefaultSourceEditorOptions) =
     inherit TextEditorOptions()
-    interface Mono.TextEditor.ITextEditorOptions with
-        member x.ColorScheme = options.ColorScheme
+    //interface Mono.TextEditor.ITextEditorOptions with
+    //    member x.ColorScheme = options.ColorScheme
 
 type ImageRendererMarker(line, image:Xwt.Drawing.Image) =
     inherit TextLineMarker()
@@ -64,6 +64,7 @@ type ImageRendererMarker(line, image:Xwt.Drawing.Image) =
     interface IExtendingTextLineMarker with
         member x.GetLineHeight editor = editor.LineHeight + image.Height
         member x.Draw(editor, g, lineNr, lineArea) = ()
+        member x.IsSpaceAbove with get() = false
 
 type FsiDocumentContext() =
     inherit DocumentContext()
@@ -365,8 +366,8 @@ type FSharpInteractivePad() =
             let text = IdeApp.Workbench.ActiveDocument.Editor.GetLineText(line)
             x.SendCommand text
             //advance to the next line
-            if PropertyService.Get ("FSharpBinding.AdvanceToNextLine", true)
-            then IdeApp.Workbench.ActiveDocument.Editor.SetCaretLocation (line + 1, Mono.TextEditor.DocumentLocation.MinColumn, false)
+            //if PropertyService.Get ("FSharpBinding.AdvanceToNextLine", true)
+            //then IdeApp.Workbench.ActiveDocument.Editor.SetCaretLocation (line + 1, Mono.TextEditor.DocumentLocation.MinColumn, false)
 
     member x.SendFile() =
         let text = IdeApp.Workbench.ActiveDocument.Editor.Text

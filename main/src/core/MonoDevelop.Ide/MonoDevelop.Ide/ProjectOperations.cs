@@ -709,12 +709,18 @@ namespace MonoDevelop.Ide
 		
 		public void NewSolution (string defaultTemplate)
 		{
+			NewSolution (defaultTemplate, true);
+		}
+
+		public void NewSolution (string defaultTemplate, bool showTemplateSelection)
+		{
 			if (!IdeApp.Workbench.SaveAllDirtyFiles ())
 				return;
 
 			var newProjectDialog = new NewProjectDialogController ();
 			newProjectDialog.OpenSolution = true;
 			newProjectDialog.SelectedTemplateId = defaultTemplate;
+			newProjectDialog.ShowTemplateSelection = showTemplateSelection;
 			newProjectDialog.Show ();
 		}
 		
@@ -791,11 +797,17 @@ namespace MonoDevelop.Ide
 
 		public SolutionFolderItem CreateProject (SolutionFolder parentFolder, string selectedTemplateId)
 		{
+			return CreateProject (parentFolder, selectedTemplateId, true);
+		}
+
+		public SolutionFolderItem CreateProject (SolutionFolder parentFolder, string selectedTemplateId, bool showTemplateSelection)
+		{
 			string basePath = parentFolder != null ? parentFolder.BaseDirectory : null;
 			var newProjectDialog = new NewProjectDialogController ();
 			newProjectDialog.ParentFolder = parentFolder;
 			newProjectDialog.BasePath = basePath;
 			newProjectDialog.SelectedTemplateId = selectedTemplateId;
+			newProjectDialog.ShowTemplateSelection = showTemplateSelection;
 
 			if (newProjectDialog.Show ()) {
 				var item = newProjectDialog.NewItem as SolutionFolderItem;
@@ -2472,7 +2484,7 @@ namespace MonoDevelop.Ide
 		{
 			if (IdeApp.Workbench != null) {
 				foreach (var doc in IdeApp.Workbench.Documents) {
-					if (doc.FileName == filePath) {
+					if (doc.FileName == filePath && doc.Editor != null) {
 						isOpen = true;
 						return doc.Editor;
 					}

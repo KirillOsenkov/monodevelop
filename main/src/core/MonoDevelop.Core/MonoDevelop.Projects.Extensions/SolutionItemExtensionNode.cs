@@ -41,7 +41,7 @@ namespace MonoDevelop.Projects.Extensions
 			set { guid = value; }
 		}
 
-		[NodeAttribute ("projectCapability ", "Capabilities that the project must have in order for this extension to be loaded. " +
+		[NodeAttribute ("projectCapability", "Capabilities that the project must have in order for this extension to be loaded. " +
 			"It can be a single capability name or an expression like \"(VisualC | CSharp) & (MSTest | NUnit).")]
 		public string ProjectCapability { get; set; }
 
@@ -59,8 +59,8 @@ namespace MonoDevelop.Projects.Extensions
 		[NodeAttribute ("alias", Description = "Friendly id of the extension")]
 		public string TypeAlias { get; set; }
 
-		[NodeAttribute ("language", Description = "Language of the extension")]
-		public string LanguageName { get; set; }
+		[NodeAttribute ("language", Description = "Language name of the extension (C#/F# etc.)")]
+ 		public string LanguageName { get; set; }
 
 		public SolutionItemExtensionNode ()
 		{

@@ -617,8 +617,8 @@
     <Compile Include="MonoDevelop.Projects\ProcessRunConfiguration.cs" />
     <Compile Include="MonoDevelop.Core\ErrorHelper.cs" />
     <Compile Include="MonoDevelop.Projects\DotNetProjectRunConfiguration.cs" />
-    <Compile Include="MonoDevelop.Projects\SimpleExpressionEvaluator.cs" />
     <Compile Include="MonoDevelop.Core\StructEqualityComparer.cs" />
+    <Compile Include="MonoDevelop.Projects\SimpleExpressionEvaluator.cs" />
     <Compile Include="MonoDevelop.Projects\PackageDependency.cs" />
     <Compile Include="..\MonoDevelop.Projects.Formats.MSBuild\MonoDevelop.Projects.MSBuild.Shared\RemoteBuildEngineMessages.cs">
       <Link>MonoDevelop.Projects.MSBuild\RemoteBuildEngineMessages.cs</Link>
