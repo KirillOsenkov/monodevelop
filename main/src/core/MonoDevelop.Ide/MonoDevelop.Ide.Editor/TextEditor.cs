@@ -54,6 +54,8 @@ namespace MonoDevelop.Ide.Editor
 		readonly ITextEditorImpl textEditorImpl;
 		public Microsoft.VisualStudio.Text.Editor.ITextView TextView { get => textEditorImpl.TextView; set => textEditorImpl.TextView = value; }
 
+		public Microsoft.VisualStudio.Text.ITextBuffer TextBuffer => textEditorImpl.TextBuffer;
+
 		IReadonlyTextDocument ReadOnlyTextDocument { get { return textEditorImpl.Document; } }
 
 		ITextDocument ReadWriteTextDocument { get { return (ITextDocument)textEditorImpl.Document; } }

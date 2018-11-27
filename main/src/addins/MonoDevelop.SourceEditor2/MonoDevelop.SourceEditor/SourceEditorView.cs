@@ -103,7 +103,9 @@ namespace MonoDevelop.SourceEditor
 				return widget.TextEditor;
 			}
 		}
-		
+
+		public Microsoft.VisualStudio.Text.ITextBuffer TextBuffer => widget.TextEditor.TextBuffer;
+
 		internal SourceEditorWidget SourceEditorWidget {
 			get {
 				return widget;

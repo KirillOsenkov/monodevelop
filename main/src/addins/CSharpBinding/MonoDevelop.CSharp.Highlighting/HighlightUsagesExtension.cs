@@ -73,7 +73,7 @@ namespace MonoDevelop.CSharp.Highlighting
 		void HandleAnalysisDocumentChanged (object sender, EventArgs args)
 		{
 			Runtime.RunInMainThread (delegate {
-				UpdateHighlighting ();
+				//UpdateHighlighting ();
 			});
 		}
 

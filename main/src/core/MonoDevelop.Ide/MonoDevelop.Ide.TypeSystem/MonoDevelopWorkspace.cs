@@ -403,7 +403,7 @@ namespace MonoDevelop.Ide.TypeSystem
 			if (document == null || OpenDocuments.Contains (documentId)) {
 				return document;
 			}
-			var textContainer = editor.TextView.TextBuffer.AsTextContainer ();
+			var textContainer = editor.TextBuffer.AsTextContainer ();
 			OpenDocuments.Add (documentId, textContainer, editor, context);
 			if (document is Document) {
 				OnDocumentOpened (documentId, textContainer);

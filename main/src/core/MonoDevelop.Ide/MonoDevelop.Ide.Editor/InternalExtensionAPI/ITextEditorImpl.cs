@@ -47,6 +47,7 @@ namespace MonoDevelop.Ide.Editor
 	interface ITextEditorImpl : IDisposable
 	{
 		Microsoft.VisualStudio.Text.Editor.ITextView TextView { get; set; }
+		Microsoft.VisualStudio.Text.ITextBuffer TextBuffer { get; }
 
 		ViewContent ViewContent { get; }
 

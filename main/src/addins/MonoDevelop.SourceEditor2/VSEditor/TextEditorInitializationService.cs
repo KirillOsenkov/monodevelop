@@ -126,7 +126,7 @@ namespace Microsoft.VisualStudio.Text.Editor.Implementation
             view.Initialize(viewModel, roles, this.EditorOptionsFactoryService.GlobalOptions, this);
             view.Properties.AddProperty(typeof(MonoDevelop.Ide.Editor.TextEditor), textEditor);
 
-            this.TextViewCreated?.Invoke(this, new TextViewCreatedEventArgs(view));
+            //this.TextViewCreated?.Invoke(this, new TextViewCreatedEventArgs(view));
 
             return view;
         }

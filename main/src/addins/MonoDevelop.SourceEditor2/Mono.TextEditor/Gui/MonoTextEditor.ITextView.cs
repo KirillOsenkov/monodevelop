@@ -167,13 +167,13 @@ namespace Mono.TextEditor
 			// See https://devdiv.visualstudio.com/DevDiv/_workitems/edit/669018 for details.
 			var instantiateEditorOperations = EditorOperations;
 
-			connectionManager = new ConnectionManager (this, factoryService.TextViewConnectionListeners, factoryService.GuardedOperations);
+			//connectionManager = new ConnectionManager (this, factoryService.TextViewConnectionListeners, factoryService.GuardedOperations);
 
 			SubscribeToEvents ();
 
 			// Binding content type specific assets includes calling out to content-type
 			// specific view creation listeners.  We need to do this as late as possible.
-			this.BindContentTypeSpecificAssets (null, TextViewModel.DataModel.ContentType);
+			//this.BindContentTypeSpecificAssets (null, TextViewModel.DataModel.ContentType);
 
 			//Subscribe now so that there is no chance that a layout could be forced by a text change.
 			//_visualBuffer.ChangedLowPriority += OnVisualBufferChanged;
@@ -257,6 +257,9 @@ namespace Mono.TextEditor
 		public ITextBuffer TextBuffer {
 			get {
 				return textBuffer;
+			}
+			set {
+				textBuffer = value;
 			}
 		}
 
